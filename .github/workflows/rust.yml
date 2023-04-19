@@ -122,7 +122,7 @@ jobs:
           cargo binstall -y --version 0.25.2 cargo-tarpaulin
           #cargo install --verbose --version 0.20.1 cargo-tarpaulin
           cargo clean
-          cargo tarpaulin --jobs 2 --all --out Xml
+          cargo tarpaulin --jobs 1 --all --out Xml
       - name: Report coverage
         continue-on-error: true
         run: bash <(curl -s https://codecov.io/bash)
