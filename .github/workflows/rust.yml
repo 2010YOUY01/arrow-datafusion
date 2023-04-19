@@ -113,7 +113,7 @@ jobs:
           path: /home/runner/.cargo
           # this key is not equal because the user is different than on a container (runner vs github)
           key: cargo-coverage-cache3-
-          swap-size-gb: 10
+          swap-size-gb: 20
       - name: Run coverage
         run: |
           export PATH=$PATH:$HOME/d/protoc/bin
