@@ -113,15 +113,14 @@ jobs:
           path: /home/runner/.cargo
           # this key is not equal because the user is different than on a container (runner vs github)
           key: cargo-coverage-cache3-
-          swap-size-gb: 20
       - name: Run coverage
         run: |
           export PATH=$PATH:$HOME/d/protoc/bin
           rustup toolchain install stable
           rustup default stable
-          #cargo install cargo-binstall
-          #cargo binstall -y --version 0.25.2 cargo-tarpaulin
-          cargo install --verbose --version 0.20.1 cargo-tarpaulin
+          cargo install cargo-binstall
+          cargo binstall -y --version 0.25.2 cargo-tarpaulin
+          #cargo install --verbose --version 0.20.1 cargo-tarpaulin
           cargo clean
           cargo tarpaulin --all --out Xml -- --skip dataframe::tests::partition_aware_union --skip dataframe::tests::verify_join_output_partitioning
       - name: Report coverage
