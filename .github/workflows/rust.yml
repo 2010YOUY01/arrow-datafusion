@@ -115,7 +115,7 @@ jobs:
           key: cargo-coverage-cache3-
       - name: Run coverage
         run: |
-          df -h /tmp
+          df -h
           sudo mount -o remount,size=20G /tmp/
           export PATH=$PATH:$HOME/d/protoc/bin
           rustup toolchain install stable
