@@ -116,7 +116,7 @@ jobs:
       - name: Run coverage
         run: |
           df -h /tmp
-          mount -o remount,size=20G /tmp/
+          sudo mount -o remount,size=20G /tmp/
           export PATH=$PATH:$HOME/d/protoc/bin
           rustup toolchain install stable
           rustup default stable
