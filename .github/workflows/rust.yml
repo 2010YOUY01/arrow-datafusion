@@ -86,7 +86,12 @@ jobs:
         with:
           submodules: true
       - name: Delete huge unnecessary tools folder
-        run: rm -rf /opt/hostedtoolcache
+        run: |
+          rm -rf /opt/hostedtoolcache
+          rm -rf /usr/share/dotnet
+          rm -rf /opt/ghc
+          rm -rf "/usr/local/share/boost"
+          rm -rf "$AGENT_TOOLSDIRECTORY"
       - name: Install protobuf compiler
         shell: bash
         run: |
@@ -113,11 +118,11 @@ jobs:
           export PATH=$PATH:$HOME/d/protoc/bin
           rustup toolchain install stable
           rustup default stable
-          #cargo install cargo-binstall
-          #cargo binstall -y --version 0.25.2 cargo-tarpaulin
-          cargo install --verbose --version 0.20.1 cargo-tarpaulin
+          cargo install cargo-binstall
+          cargo binstall -y --version 0.25.2 cargo-tarpaulin
+          #cargo install --verbose --version 0.20.1 cargo-tarpaulin
           cargo clean
-          cargo tarpaulin --all --out Xml
+          cargo tarpaulin --jobs 2 --all --out Xml
       - name: Report coverage
         continue-on-error: true
         run: bash <(curl -s https://codecov.io/bash)
