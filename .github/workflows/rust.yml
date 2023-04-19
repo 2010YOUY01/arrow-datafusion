@@ -111,7 +111,7 @@ jobs:
           export PATH=$PATH:$HOME/d/protoc/bin
           rustup toolchain install stable
           rustup default stable
-          cargo install --version 0.20.1 cargo-tarpaulin
+          cargo binstall --version 0.25.2 cargo-tarpaulin
           cargo tarpaulin --all --out Xml
       - name: Report coverage
         continue-on-error: true
