@@ -113,7 +113,8 @@ jobs:
           rustup default stable
           cargo install cargo-binstall
           cargo binstall -y --version 0.25.2 cargo-tarpaulin
-          cargo tarpaulin --all --out Xml
+          cargo clean
+          cargo tarpaulin --verbose --jobs 2 --all --out Xml
       - name: Report coverage
         continue-on-error: true
         run: bash <(curl -s https://codecov.io/bash)
