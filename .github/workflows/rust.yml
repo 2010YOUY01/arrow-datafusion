@@ -130,7 +130,7 @@ jobs:
           #cargo binstall -y --version 0.25.2 cargo-tarpaulin
           cargo install --verbose --version 0.20.1 cargo-tarpaulin
           cargo clean
-          cargo tarpaulin --all --out Xml-- --skip dataframe::tests::partition_aware_union --skip dataframe::tests::verify_join_output_partitioning
+          cargo tarpaulin --all --out Xml -- --skip dataframe::tests::partition_aware_union --skip dataframe::tests::verify_join_output_partitioning
       - name: Report coverage
         continue-on-error: true
         run: bash <(curl -s https://codecov.io/bash)
