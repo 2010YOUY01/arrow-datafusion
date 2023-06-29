@@ -618,6 +618,7 @@ mod tests {
     use object_store::path::Path;
     use regex::Regex;
     use rstest::*;
+    use std::fs;
 
     #[tokio::test]
     async fn read_small_batches() -> Result<()> {
@@ -941,6 +942,7 @@ mod tests {
         let df = ctx.sql(&format!("EXPLAIN {sql}")).await?;
         let result = df.collect().await?;
         let plan = format!("{}", &pretty::pretty_format_batches(&result)?);
+        println!("{plan}");
 
         let re = Regex::new(r"CsvExec: file_groups=\{(\d+) group").unwrap();
 
@@ -1228,6 +1230,8 @@ mod tests {
         let query = "select sum(column_1) from one_col where column_1 > 0;";
         let query_result = ctx.sql(query).await?.collect().await?;
         let actual_partitions = count_query_csv_partitions(&ctx, query).await?;
+        let fsize = fs::metadata("tests/data/one_col.csv")?.len();
+        println!("File size of one_col.csv: {fsize}");
 
         #[rustfmt::skip]
         let expected = vec![
