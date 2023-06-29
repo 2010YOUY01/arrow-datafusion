@@ -1211,7 +1211,7 @@ mod tests {
     /// 5\n
     /// 5\n
     /// (...10 rows total)
-    #[rstest(n_partitions, case(1), case(2), case(3), case(7), case(10), case(32))]
+    #[rstest(n_partitions, case(1), case(2), case(3), case(5), case(10), case(32))]
     #[tokio::test]
     async fn test_csv_parallel_one_col(n_partitions: usize) -> Result<()> {
         let config = SessionConfig::new()
@@ -1241,8 +1241,12 @@ mod tests {
             "| 50                    |",
             "+-----------------------+",
         ];
-        // File is `file_size` bytes (20 Bytes here), at most get repartitioned into 20 partitions
-        let file_size = 20;
+        // A 20-byte file at most get repartitioned into 20 chunks
+        let file_size = if cfg!(target_os = "windows") {
+            30 // newline on Win is '\r\n'
+        } else {
+            20
+        };
         let expected_partitions = if n_partitions <= file_size {
             n_partitions
         } else {
