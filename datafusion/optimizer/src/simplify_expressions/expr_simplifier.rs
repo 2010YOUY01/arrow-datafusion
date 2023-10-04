@@ -34,7 +34,7 @@ use datafusion_common::tree_node::{RewriteRecursion, TreeNode, TreeNodeRewriter}
 use datafusion_common::{
     exec_err, internal_err, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
 };
-use datafusion_expr::expr::{InList, InSubquery, ScalarFunction};
+use datafusion_expr::expr::{ExternalScalarFunction, InList, InSubquery, ScalarFunction};
 use datafusion_expr::{
     and, expr, lit, or, BinaryExpr, BuiltinScalarFunction, Case, ColumnarValue, Expr,
     Like, Volatility,
@@ -345,6 +345,9 @@ impl<'a> ConstEvaluator<'a> {
             | Expr::Placeholder(_) => false,
             Expr::ScalarFunction(ScalarFunction { fun, .. }) => {
                 Self::volatility_ok(fun.volatility())
+            }
+            Expr::ExternalScalarFunction(ExternalScalarFunction { fun, .. }) => {
+                Self::volatility_ok(fun.signature().volatility)
             }
             Expr::ScalarUDF(expr::ScalarUDF { fun, .. }) => {
                 Self::volatility_ok(fun.signature.volatility)

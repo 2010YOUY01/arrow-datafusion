@@ -17,11 +17,68 @@
 
 //! Udf module contains foundational types that are used to represent UDFs in DataFusion.
 
-use crate::{Expr, ReturnTypeFunction, ScalarFunctionImplementation, Signature};
+use crate::{
+    Expr, ReturnTypeFunction, ScalarFunctionImplementation, Signature, Volatility,
+};
+use arrow::array::{ArrayRef, Float32Array, Float64Array};
+use arrow::datatypes::DataType;
+use datafusion_common::cast::as_float64_array;
+use datafusion_common::Result;
 use std::fmt;
 use std::fmt::Debug;
 use std::fmt::Formatter;
 use std::sync::Arc;
+
+pub trait ScalarFunctionDef: Sync + Send + std::fmt::Debug {
+    // TODO: support alias
+    fn name(&self) -> &str;
+
+    fn signature(&self) -> Signature;
+
+    // TODO: ReturnTypeFunction -> a ENUM
+    //     most function's return type is either the same as 1st arg or a fixed type
+    fn return_type(&self) -> ReturnTypeFunction;
+
+    fn execute(&self, args: &[ArrayRef]) -> Result<ArrayRef>;
+}
+
+#[derive(Debug)]
+pub struct PowFunction;
+
+impl ScalarFunctionDef for PowFunction {
+    fn name(&self) -> &str {
+        return "powr";
+    }
+
+    fn signature(&self) -> Signature {
+        Signature::exact(
+            vec![DataType::Float64, DataType::Float64],
+            Volatility::Immutable,
+        )
+    }
+
+    fn return_type(&self) -> ReturnTypeFunction {
+        let return_type = Arc::new(DataType::Float64);
+        let return_type: ReturnTypeFunction = Arc::new(move |_| Ok(return_type.clone()));
+        return return_type;
+    }
+
+    fn execute(&self, args: &[ArrayRef]) -> Result<ArrayRef> {
+        assert_eq!(args.len(), 2);
+        let base = as_float64_array(&args[0]).expect("cast failed");
+        let exponent = as_float64_array(&args[1]).expect("cast failed");
+        assert_eq!(exponent.len(), base.len());
+        let array = base
+            .iter()
+            .zip(exponent.iter())
+            .map(|(base, exponent)| match (base, exponent) {
+                (Some(base), Some(exponent)) => Some(base.powf(exponent)),
+                _ => None,
+            })
+            .collect::<Float64Array>();
+        Ok(Arc::new(array) as ArrayRef)
+    }
+}
 
 /// Logical representation of a UDF.
 #[derive(Clone)]

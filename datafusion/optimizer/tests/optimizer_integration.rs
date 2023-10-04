@@ -400,6 +400,13 @@ impl ContextProvider for MySchemaProvider {
         None
     }
 
+    fn get_external_scalar_function_meta(
+        &self,
+        name: &str,
+    ) -> Option<Arc<dyn datafusion_expr::ScalarFunctionDef>> {
+        None
+    }
+
     fn get_aggregate_meta(&self, _name: &str) -> Option<Arc<AggregateUDF>> {
         None
     }

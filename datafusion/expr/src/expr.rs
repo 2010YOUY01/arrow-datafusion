@@ -26,6 +26,7 @@ use crate::utils::{expr_to_columns, find_out_reference_exprs};
 use crate::window_frame;
 use crate::window_function;
 use crate::Operator;
+use crate::ScalarFunctionDef;
 use arrow::datatypes::DataType;
 use datafusion_common::internal_err;
 use datafusion_common::{plan_err, Column, DataFusionError, Result, ScalarValue};
@@ -151,6 +152,9 @@ pub enum Expr {
     ScalarFunction(ScalarFunction),
     /// Represents the call of a user-defined scalar function with arguments.
     ScalarUDF(ScalarUDF),
+    /// Represents external scalar functions (save functionality as `ScalarFunction` but defined
+    /// outside core)
+    ExternalScalarFunction(ExternalScalarFunction),
     /// Represents the call of an aggregate built-in function with arguments.
     AggregateFunction(AggregateFunction),
     /// Represents the call of a window function with arguments.
@@ -356,6 +360,37 @@ pub struct ScalarUDF {
 impl ScalarUDF {
     /// Create a new ScalarUDF expression
     pub fn new(fun: Arc<crate::ScalarUDF>, args: Vec<Expr>) -> Self {
+        Self { fun, args }
+    }
+}
+
+/// ScalarUDF expression
+#[derive(Clone, Debug)]
+pub struct ExternalScalarFunction {
+    /// The function
+    pub fun: Arc<dyn ScalarFunctionDef>,
+    /// List of expressions to feed to the functions as arguments
+    pub args: Vec<Expr>,
+}
+
+impl Hash for ExternalScalarFunction {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.fun.name().hash(state);
+        self.args.hash(state);
+    }
+}
+
+impl PartialEq for ExternalScalarFunction {
+    fn eq(&self, other: &Self) -> bool {
+        self.fun.name() == other.fun.name() && self.args == other.args
+    }
+}
+
+impl Eq for ExternalScalarFunction {}
+
+impl ExternalScalarFunction {
+    /// Create a new ScalarUDF expression
+    pub fn new(fun: Arc<dyn ScalarFunctionDef>, args: Vec<Expr>) -> Self {
         Self { fun, args }
     }
 }
@@ -721,6 +756,7 @@ impl Expr {
             Expr::Placeholder(_) => "Placeholder",
             Expr::QualifiedWildcard { .. } => "QualifiedWildcard",
             Expr::ScalarFunction(..) => "ScalarFunction",
+            Expr::ExternalScalarFunction(..) => "ExternalScalarFunction",
             Expr::ScalarSubquery { .. } => "ScalarSubquery",
             Expr::ScalarUDF(..) => "ScalarUDF",
             Expr::ScalarVariable(..) => "ScalarVariable",
@@ -1121,6 +1157,9 @@ impl fmt::Display for Expr {
             Expr::ScalarFunction(func) => {
                 fmt_function(f, &func.fun.to_string(), false, &func.args, true)
             }
+            Expr::ExternalScalarFunction(func) => {
+                fmt_function(f, &func.fun.name().to_string(), false, &func.args, true)
+            }
             Expr::ScalarUDF(ScalarUDF { fun, args }) => {
                 fmt_function(f, &fun.name, false, args, true)
             }
@@ -1454,6 +1493,9 @@ fn create_name(e: &Expr) -> Result<String> {
         }
         Expr::ScalarFunction(func) => {
             create_function_name(&func.fun.to_string(), false, &func.args)
+        }
+        Expr::ExternalScalarFunction(func) => {
+            create_function_name(&func.fun.name().to_string(), false, &func.args)
         }
         Expr::ScalarUDF(ScalarUDF { fun, args }) => {
             create_function_name(&fun.name, false, args)

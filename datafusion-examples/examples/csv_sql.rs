@@ -18,6 +18,7 @@
 use datafusion::datasource::file_format::file_compression_type::FileCompressionType;
 use datafusion::error::Result;
 use datafusion::prelude::*;
+use std::time::Instant;
 
 /// This example demonstrates executing a simple query against an Arrow data source (CSV) and
 /// fetching results
@@ -25,46 +26,18 @@ use datafusion::prelude::*;
 async fn main() -> Result<()> {
     // create local execution context
     let ctx = SessionContext::new();
-
-    let testdata = datafusion::test_util::arrow_test_data();
-
-    // register csv file with the execution context
-    ctx.register_csv(
-        "aggregate_test_100",
-        &format!("{testdata}/csv/aggregate_test_100.csv"),
-        CsvReadOptions::new(),
-    )
-    .await?;
-
-    // execute the query
     let df = ctx
         .sql(
-            "SELECT c1, MIN(c12), MAX(c12) \
-        FROM aggregate_test_100 \
-        WHERE c11 > 0.1 AND c11 < 0.9 \
-        GROUP BY c1",
+            "CREATE EXTERNAL TABLE lineitem STORED AS PARQUET LOCATION '/Users/yongting/Desktop/code/my_datafusion/arrow-datafusion/benchmarks/data/tpch_sf10/lineitem/part-0.parquet';",
         )
         .await?;
-
-    // print the results
     df.show().await?;
 
-    // query compressed CSV with specific options
-    let csv_options = CsvReadOptions::default()
-        .has_header(true)
-        .file_compression_type(FileCompressionType::GZIP)
-        .file_extension("csv.gz");
-    let df = ctx
-        .read_csv(
-            &format!("{testdata}/csv/aggregate_test_100.csv.gz"),
-            csv_options,
-        )
-        .await?;
-    let df = df
-        .filter(col("c1").eq(lit("a")))?
-        .select_columns(&["c2", "c3"])?;
-
+    let start = Instant::now(); // Records the current time
+    let df = ctx.sql("select * from lineitem;").await?;
     df.show().await?;
 
+    let duration = start.elapsed(); // Calculates the elapsed time
+    println!("Time elapsed in milliseconds: {:?}", duration.as_millis());
     Ok(())
 }

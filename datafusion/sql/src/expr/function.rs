@@ -17,7 +17,7 @@
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use datafusion_common::{not_impl_err, plan_err, DFSchema, DataFusionError, Result};
-use datafusion_expr::expr::{ScalarFunction, ScalarUDF};
+use datafusion_expr::expr::{ExternalScalarFunction, ScalarFunction, ScalarUDF};
 use datafusion_expr::function::suggest_valid_function;
 use datafusion_expr::window_frame::regularize;
 use datafusion_expr::{
@@ -51,6 +51,18 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             let args =
                 self.function_args_to_expr(function.args, schema, planner_context)?;
             return Ok(Expr::ScalarUDF(ScalarUDF::new(fm, args)));
+        }
+
+        // external functions
+        if let Some(fun) = self
+            .schema_provider
+            .get_external_scalar_function_meta(&name)
+        {
+            let args =
+                self.function_args_to_expr(function.args, schema, planner_context)?;
+            return Ok(Expr::ExternalScalarFunction(ExternalScalarFunction::new(
+                fun, args,
+            )));
         }
 
         // next, scalar built-in
