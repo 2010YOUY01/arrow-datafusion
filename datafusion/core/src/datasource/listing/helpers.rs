@@ -38,7 +38,7 @@ use super::PartitionedFile;
 use crate::datasource::listing::ListingTableUrl;
 use datafusion_common::tree_node::{TreeNode, VisitRecursion};
 use datafusion_common::{Column, DFField, DFSchema, DataFusionError};
-use datafusion_expr::expr::{ExternalScalarFunction, ScalarUDF};
+use datafusion_expr::expr::ScalarUDF;
 use datafusion_expr::{Expr, Volatility};
 use datafusion_physical_expr::create_physical_expr;
 use datafusion_physical_expr::execution_props::ExecutionProps;
@@ -94,15 +94,6 @@ pub fn expr_applicable_for_cols(col_names: &[String], expr: &Expr) -> bool {
                 match scalar_function.fun.volatility() {
                     Volatility::Immutable => VisitRecursion::Continue,
                     // TODO: Stable functions could be `applicable`, but that would require access to the context
-                    Volatility::Stable | Volatility::Volatile => {
-                        is_applicable = false;
-                        VisitRecursion::Stop
-                    }
-                }
-            }
-            Expr::ExternalScalarFunction(external_scalar_function) => {
-                match external_scalar_function.fun.signature().volatility {
-                    Volatility::Immutable => VisitRecursion::Continue,
                     Volatility::Stable | Volatility::Volatile => {
                         is_applicable = false;
                         VisitRecursion::Stop

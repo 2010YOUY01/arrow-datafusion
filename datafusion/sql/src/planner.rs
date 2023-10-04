@@ -23,7 +23,6 @@ use std::vec;
 use arrow_schema::*;
 use datafusion_common::field_not_found;
 use datafusion_common::internal_err;
-use datafusion_expr::ScalarFunctionDef;
 use datafusion_expr::WindowUDF;
 use sqlparser::ast::ExactNumberInfo;
 use sqlparser::ast::TimezoneInfo;
@@ -50,11 +49,6 @@ pub trait ContextProvider {
     fn get_table_provider(&self, name: TableReference) -> Result<Arc<dyn TableSource>>;
     /// Getter for a UDF description
     fn get_function_meta(&self, name: &str) -> Option<Arc<ScalarUDF>>;
-    /// Getter for a external scalar function
-    fn get_external_scalar_function_meta(
-        &self,
-        name: &str,
-    ) -> Option<Arc<dyn ScalarFunctionDef>>;
     /// Getter for a UDAF description
     fn get_aggregate_meta(&self, name: &str) -> Option<Arc<AggregateUDF>>;
     /// Getter for a UDWF

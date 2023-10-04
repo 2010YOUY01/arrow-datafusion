@@ -39,7 +39,6 @@ use datafusion_expr::{
     StringifiedPlan, UserDefinedLogicalNode, WindowUDF,
 };
 pub use datafusion_physical_expr::execution_props::ExecutionProps;
-use datafusion_physical_expr::udf::{ScalarFunctionDef, ScalarUDF};
 use datafusion_physical_expr::var_provider::is_system_variables;
 use parking_lot::RwLock;
 use std::collections::hash_map::Entry;
@@ -81,6 +80,7 @@ use crate::config::ConfigOptions;
 use crate::datasource::physical_plan::{plan_to_csv, plan_to_json, plan_to_parquet};
 use crate::execution::{runtime_env::RuntimeEnv, FunctionRegistry};
 use crate::physical_plan::udaf::AggregateUDF;
+use crate::physical_plan::udf::ScalarUDF;
 use crate::physical_plan::ExecutionPlan;
 use crate::physical_planner::DefaultPhysicalPlanner;
 use crate::physical_planner::PhysicalPlanner;
@@ -783,15 +783,8 @@ impl SessionContext {
     pub fn register_udf(&self, f: ScalarUDF) {
         self.state
             .write()
-            .scalar_udfs
-            .insert(f.name.clone(), Arc::new(f));
-    }
-
-    pub fn register_scalar_function(&self, f: Arc<dyn ScalarFunctionDef>) {
-        self.state
-            .write()
             .scalar_functions
-            .insert(f.name().to_string(), f);
+            .insert(f.name.clone(), Arc::new(f));
     }
 
     /// Registers an aggregate UDF within this context.
@@ -1376,9 +1369,7 @@ pub struct SessionState {
     /// Collection of catalogs containing schemas and ultimately TableProviders
     catalog_list: Arc<dyn CatalogList>,
     /// Scalar functions that are registered with the context
-    scalar_udfs: HashMap<String, Arc<ScalarUDF>>,
-    /// Scalar functions that are registered with the context
-    scalar_functions: HashMap<String, Arc<dyn ScalarFunctionDef>>,
+    scalar_functions: HashMap<String, Arc<ScalarUDF>>,
     /// Aggregate functions registered in the context
     aggregate_functions: HashMap<String, Arc<AggregateUDF>>,
     /// Window functions registered in the context
@@ -1475,7 +1466,6 @@ impl SessionState {
             physical_optimizers: PhysicalOptimizer::new(),
             query_planner: Arc::new(DefaultQueryPlanner {}),
             catalog_list,
-            scalar_udfs: HashMap::new(),
             scalar_functions: HashMap::new(),
             aggregate_functions: HashMap::new(),
             window_functions: HashMap::new(),
@@ -1966,14 +1956,7 @@ impl SessionState {
     }
 
     /// Return reference to scalar_functions
-    pub fn scalar_udfs(&self) -> &HashMap<String, Arc<ScalarUDF>> {
-        &self.scalar_udfs
-    }
-
-    /// Return reference to scalar_functions
-    pub fn external_scalar_functions(
-        &self,
-    ) -> &HashMap<String, Arc<dyn ScalarFunctionDef>> {
+    pub fn scalar_functions(&self) -> &HashMap<String, Arc<ScalarUDF>> {
         &self.scalar_functions
     }
 
@@ -2013,14 +1996,7 @@ impl<'a> ContextProvider for SessionContextProvider<'a> {
     }
 
     fn get_function_meta(&self, name: &str) -> Option<Arc<ScalarUDF>> {
-        self.state.scalar_udfs().get(name).cloned()
-    }
-
-    fn get_external_scalar_function_meta(
-        &self,
-        name: &str,
-    ) -> Option<Arc<dyn ScalarFunctionDef>> {
-        self.state.scalar_functions.get(name).cloned()
+        self.state.scalar_functions().get(name).cloned()
     }
 
     fn get_aggregate_meta(&self, name: &str) -> Option<Arc<AggregateUDF>> {
@@ -2056,11 +2032,11 @@ impl<'a> ContextProvider for SessionContextProvider<'a> {
 
 impl FunctionRegistry for SessionState {
     fn udfs(&self) -> HashSet<String> {
-        self.scalar_udfs.keys().cloned().collect()
+        self.scalar_functions.keys().cloned().collect()
     }
 
     fn udf(&self, name: &str) -> Result<Arc<ScalarUDF>> {
-        let result = self.scalar_udfs.get(name);
+        let result = self.scalar_functions.get(name);
 
         result.cloned().ok_or_else(|| {
             DataFusionError::Plan(format!(
@@ -2119,7 +2095,7 @@ impl From<&SessionState> for TaskContext {
             task_id,
             state.session_id.clone(),
             state.config.clone(),
-            state.scalar_udfs.clone(),
+            state.scalar_functions.clone(),
             state.aggregate_functions.clone(),
             state.window_functions.clone(),
             state.runtime_env.clone(),

@@ -19,7 +19,7 @@
 use crate::{PhysicalExpr, ScalarFunctionExpr};
 use arrow::datatypes::Schema;
 use datafusion_common::Result;
-pub use datafusion_expr::{ScalarFunctionDef, ScalarUDF};
+pub use datafusion_expr::ScalarUDF;
 use std::sync::Arc;
 
 /// Create a physical expression of the UDF.

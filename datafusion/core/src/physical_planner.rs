@@ -82,8 +82,8 @@ use datafusion_common::{
 };
 use datafusion_expr::expr::{
     self, AggregateFunction, AggregateUDF, Alias, Between, BinaryExpr, Cast,
-    ExternalScalarFunction, GetFieldAccess, GetIndexedField, GroupingSet, InList, Like,
-    ScalarUDF, TryCast, WindowFunction,
+    GetFieldAccess, GetIndexedField, GroupingSet, InList, Like, ScalarUDF, TryCast,
+    WindowFunction,
 };
 use datafusion_expr::expr_rewriter::{unalias, unnormalize_cols};
 use datafusion_expr::logical_plan::builder::wrap_projection_for_join_if_necessary;

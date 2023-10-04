@@ -19,8 +19,8 @@
 
 use crate::expr::{
     AggregateFunction, AggregateUDF, Alias, Between, BinaryExpr, Case, Cast,
-    ExternalScalarFunction, GetIndexedField, GroupingSet, InList, InSubquery, Like,
-    Placeholder, ScalarFunction, ScalarUDF, Sort, TryCast, WindowFunction,
+    GetIndexedField, GroupingSet, InList, InSubquery, Like, Placeholder, ScalarFunction,
+    ScalarUDF, Sort, TryCast, WindowFunction,
 };
 use crate::Expr;
 use datafusion_common::tree_node::VisitRecursion;
@@ -52,7 +52,7 @@ impl TreeNode for Expr {
             }
             Expr::GroupingSet(GroupingSet::Rollup(exprs))
             | Expr::GroupingSet(GroupingSet::Cube(exprs)) => exprs.clone(),
-            Expr::ScalarFunction (ScalarFunction{ args, .. } )| Expr::ScalarUDF(ScalarUDF { args, .. }) | Expr::ExternalScalarFunction(ExternalScalarFunction{args, ..})  => {
+            Expr::ScalarFunction (ScalarFunction{ args, .. } )| Expr::ScalarUDF(ScalarUDF { args, .. })  => {
                 args.clone()
             }
             Expr::GroupingSet(GroupingSet::GroupingSets(lists_of_exprs)) => {
@@ -268,12 +268,6 @@ impl TreeNode for Expr {
             ),
             Expr::ScalarUDF(ScalarUDF { args, fun }) => {
                 Expr::ScalarUDF(ScalarUDF::new(fun, transform_vec(args, &mut transform)?))
-            }
-            Expr::ExternalScalarFunction(ExternalScalarFunction { args, fun }) => {
-                Expr::ExternalScalarFunction(ExternalScalarFunction::new(
-                    fun,
-                    transform_vec(args, &mut transform)?,
-                ))
             }
             Expr::WindowFunction(WindowFunction {
                 args,

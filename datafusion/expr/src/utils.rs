@@ -284,7 +284,6 @@ pub fn expr_to_columns(expr: &Expr, accum: &mut HashSet<Column>) -> Result<()> {
             | Expr::Sort { .. }
             | Expr::ScalarFunction(..)
             | Expr::ScalarUDF(..)
-            | Expr::ExternalScalarFunction(..)
             | Expr::WindowFunction { .. }
             | Expr::AggregateFunction { .. }
             | Expr::GroupingSet(_)

@@ -2794,13 +2794,6 @@ impl ContextProvider for MockContextProvider {
         None
     }
 
-    fn get_external_scalar_function_meta(
-        &self,
-        name: &str,
-    ) -> Option<Arc<dyn datafusion_expr::ScalarFunctionDef>> {
-        None
-    }
-
     fn get_aggregate_meta(&self, name: &str) -> Option<Arc<AggregateUDF>> {
         self.udafs.get(name).map(Arc::clone)
     }
