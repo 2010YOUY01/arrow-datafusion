@@ -27,6 +27,7 @@ use datafusion::{
 use datafusion::prelude::*;
 use datafusion::{error::Result, physical_plan::functions::make_scalar_function};
 use datafusion_common::cast::as_float64_array;
+use datafusion_expr::{to_scalar_function, PowFunction};
 use std::sync::Arc;
 
 // create local execution context with an in-memory table
@@ -117,27 +118,11 @@ async fn main() -> Result<()> {
     //   we can register it, and call it later:
     ctx.register_udf(pow.clone()); // clone is only required in this example because we show both usages
 
-    // * if the UDF is expected to be used directly in the scope, `.call` it directly:
-    let expr = pow.call(vec![col("a"), col("b")]);
+    let powr_func = PowFunction;
+    let powr_udf = to_scalar_function(Arc::new(powr_func));
+    ctx.register_udf(powr_udf);
 
-    // get a DataFrame from the context
-    let df = ctx.table("t").await?;
-
-    // if we do not have `pow` in the scope and we registered it, we can get it from the registry
-    let pow = df.registry().udf("pow")?;
-    // equivalent to expr
-    let expr1 = pow.call(vec![col("a"), col("b")]);
-
-    // equivalent to `'SELECT pow(a, b), pow(a, b) AS pow1 FROM t'`
-    let df = df.select(vec![
-        expr,
-        // alias so that they have different column names
-        expr1.alias("pow1"),
-    ])?;
-
-    // note that "b" is f32, not f64. DataFusion coerces the types to match the UDF's signature.
-
-    // print the results
+    let df = ctx.sql("select powr(3,3);").await?;
     df.show().await?;
 
     Ok(())

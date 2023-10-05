@@ -18,12 +18,13 @@
 //! Udf module contains foundational types that are used to represent UDFs in DataFusion.
 
 use crate::{
-    Expr, ReturnTypeFunction, ScalarFunctionImplementation, Signature, Volatility,
+    ColumnarValue, Expr, ReturnTypeFunction, ScalarFunctionImplementation, Signature,
+    Volatility,
 };
 use arrow::array::{ArrayRef, Float32Array, Float64Array};
 use arrow::datatypes::DataType;
 use datafusion_common::cast::as_float64_array;
-use datafusion_common::Result;
+use datafusion_common::{Result, ScalarValue};
 use std::fmt;
 use std::fmt::Debug;
 use std::fmt::Formatter;
@@ -40,6 +41,87 @@ pub trait ScalarFunctionDef: Sync + Send + std::fmt::Debug {
     fn return_type(&self) -> ReturnTypeFunction;
 
     fn execute(&self, args: &[ArrayRef]) -> Result<ArrayRef>;
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum Hint {
+    /// Indicates the argument needs to be padded if it is scalar
+    Pad,
+    /// Indicates the argument can be converted to an array of length 1
+    AcceptsSingular,
+}
+
+/// decorates a function to handle [`ScalarValue`]s by converting them to arrays before calling the function
+/// and vice-versa after evaluation.
+pub fn make_scalar_function<F>(inner: F) -> ScalarFunctionImplementation
+where
+    F: Fn(&[ArrayRef]) -> Result<ArrayRef> + Sync + Send + 'static,
+{
+    make_scalar_function_with_hints(inner, vec![])
+}
+
+/// Just like [`make_scalar_function`], decorates the given function to handle both [`ScalarValue`]s and arrays.
+/// Additionally can receive a `hints` vector which can be used to control the output arrays when generating them
+/// from [`ScalarValue`]s.
+///
+/// Each element of the `hints` vector gets mapped to the corresponding argument of the function. The number of hints
+/// can be less or greater than the number of arguments (for functions with variable number of arguments). Each unmapped
+/// argument will assume the default hint (for padding, it is [`Hint::Pad`]).
+pub(crate) fn make_scalar_function_with_hints<F>(
+    inner: F,
+    hints: Vec<Hint>,
+) -> ScalarFunctionImplementation
+where
+    F: Fn(&[ArrayRef]) -> Result<ArrayRef> + Sync + Send + 'static,
+{
+    Arc::new(move |args: &[ColumnarValue]| {
+        // first, identify if any of the arguments is an Array. If yes, store its `len`,
+        // as any scalar will need to be converted to an array of len `len`.
+        let len = args
+            .iter()
+            .fold(Option::<usize>::None, |acc, arg| match arg {
+                ColumnarValue::Scalar(_) => acc,
+                ColumnarValue::Array(a) => Some(a.len()),
+            });
+
+        let inferred_length = len.unwrap_or(1);
+        let args = args
+            .iter()
+            .zip(hints.iter().chain(std::iter::repeat(&Hint::Pad)))
+            .map(|(arg, hint)| {
+                // Decide on the length to expand this scalar to depending
+                // on the given hints.
+                let expansion_len = match hint {
+                    Hint::AcceptsSingular => 1,
+                    Hint::Pad => inferred_length,
+                };
+                arg.clone().into_array(expansion_len)
+            })
+            .collect::<Vec<ArrayRef>>();
+
+        let result = (inner)(&args);
+
+        // maybe back to scalar
+        if len.is_some() {
+            result.map(ColumnarValue::Array)
+        } else {
+            ScalarValue::try_from_array(&result?, 0).map(ColumnarValue::Scalar)
+        }
+    })
+}
+
+/// Make a `dyn ScalarFunctionDef` into a internal struct for scalar functions, then it can be
+/// registered into context
+pub fn to_scalar_function(func: Arc<dyn ScalarFunctionDef>) -> ScalarUDF {
+    let execution = Arc::clone(&func);
+    let func_impl = make_scalar_function(move |args| execution.execute(args));
+
+    ScalarUDF::new(
+        func.name(),
+        &func.signature(),
+        &func.return_type(),
+        &func_impl,
+    )
 }
 
 #[derive(Debug)]
