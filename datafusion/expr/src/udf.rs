@@ -17,11 +17,47 @@
 
 //! Udf module contains foundational types that are used to represent UDFs in DataFusion.
 
-use crate::{Expr, ReturnTypeFunction, ScalarFunctionImplementation, Signature};
+use crate::{
+    ColumnarValue, Expr, FuncMonotonicity, ReturnTypeFunction,
+    ScalarFunctionImplementation, Signature, TypeSignature, Volatility,
+};
+use arrow::array::ArrayRef;
+use datafusion_common::{internal_err, DataFusionError, Result};
+use std::any::Any;
 use std::fmt;
 use std::fmt::Debug;
 use std::fmt::Formatter;
 use std::sync::Arc;
+
+// TODO(PR): add doc comments
+pub trait ScalarFunctionDef: Any + Sync + Send + std::fmt::Debug {
+    // May return 1 or more name as aliasing
+    fn name(&self) -> &[&str];
+
+    fn input_type(&self) -> TypeSignature;
+
+    fn return_type(&self) -> ReturnTypeFunction;
+
+    fn execute(&self, _args: &[ArrayRef]) -> Result<ArrayRef> {
+        internal_err!("This method should be implemented if `supports_execute_raw()` returns `false`")
+    }
+
+    fn volatility(&self) -> Volatility;
+
+    fn monotonicity(&self) -> Option<FuncMonotonicity>;
+
+    /// `execute()` and `execute_raw()` are two possible alternative for function definition:
+    /// If returns `false`, `execute()` will be used for execution;
+    /// If returns `true`, `execute_raw()` will be called.
+    fn use_execute_raw_instead(&self) -> bool {
+        return false;
+    }
+
+    /// An alternative function defination than `execute()`
+    fn execute_raw(&self, _args: &[ColumnarValue]) -> Result<ColumnarValue> {
+        internal_err!("This method should be implemented if `supports_execute_raw()` returns `true`")
+    }
+}
 
 /// Logical representation of a UDF.
 #[derive(Clone)]

@@ -29,7 +29,7 @@ use datafusion_common::{
 };
 use datafusion_expr::expr::{
     self, Between, BinaryExpr, Case, Exists, InList, InSubquery, Like, ScalarFunction,
-    ScalarUDF, WindowFunction,
+    ScalarFunctionExpr, ScalarUDF, WindowFunction,
 };
 use datafusion_expr::expr_rewriter::rewrite_preserving_name;
 use datafusion_expr::expr_schema::cast_subquery;
@@ -45,7 +45,8 @@ use datafusion_expr::type_coercion::{is_datetime, is_utf8_or_large_utf8};
 use datafusion_expr::{
     is_false, is_not_false, is_not_true, is_not_unknown, is_true, is_unknown,
     type_coercion, window_function, AggregateFunction, BuiltinScalarFunction, Expr,
-    LogicalPlan, Operator, Projection, WindowFrame, WindowFrameBound, WindowFrameUnits,
+    LogicalPlan, Operator, Projection, ScalarFunctionDef, WindowFrame, WindowFrameBound,
+    WindowFrameUnits,
 };
 use datafusion_expr::{ExprSchemable, Signature};
 
@@ -337,6 +338,24 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                     coerce_arguments_for_fun(new_args.as_slice(), &self.schema, &fun)?;
                 Ok(Expr::ScalarFunction(ScalarFunction::new(fun, new_args)))
             }
+            Expr::ScalarFunctionExpr(ScalarFunctionExpr { fun, args }) => {
+                let new_args = coerce_arguments_for_signature(
+                    args.as_slice(),
+                    &self.schema,
+                    &Signature::new(
+                        fun.input_type(),
+                        datafusion_expr::Volatility::Immutable,
+                    ),
+                )?;
+                let new_args = coerce_arguments_for_fun_expr(
+                    new_args.as_slice(),
+                    &self.schema,
+                    fun.clone(),
+                )?;
+                Ok(Expr::ScalarFunctionExpr(ScalarFunctionExpr::new(
+                    fun, new_args,
+                )))
+            }
             Expr::AggregateFunction(expr::AggregateFunction {
                 fun,
                 args,
@@ -402,7 +421,24 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                 ));
                 Ok(expr)
             }
-            expr => Ok(expr),
+            Expr::Alias(_)
+            | Expr::Column(_)
+            | Expr::ScalarVariable(_, _)
+            | Expr::Literal(_)
+            | Expr::SimilarTo(_)
+            | Expr::Not(_)
+            | Expr::IsNotNull(_)
+            | Expr::IsNull(_)
+            | Expr::Negative(_)
+            | Expr::GetIndexedField(_)
+            | Expr::Cast(_)
+            | Expr::TryCast(_)
+            | Expr::Sort(_)
+            | Expr::Wildcard
+            | Expr::QualifiedWildcard { .. }
+            | Expr::GroupingSet(_)
+            | Expr::Placeholder(_)
+            | Expr::OuterReferenceColumn(_, _) => Ok(expr),
         }
     }
 }
@@ -549,6 +585,57 @@ fn coerce_arguments_for_signature(
         .enumerate()
         .map(|(i, expr)| cast_expr(expr, &new_types[i], schema))
         .collect::<Result<Vec<_>>>()
+}
+
+fn coerce_arguments_for_fun_expr(
+    expressions: &[Expr],
+    schema: &DFSchema,
+    fun: Arc<dyn ScalarFunctionDef>,
+) -> Result<Vec<Expr>> {
+    if expressions.is_empty() {
+        return Ok(vec![]);
+    }
+
+    let mut expressions: Vec<Expr> = expressions.to_vec();
+
+    // Cast Fixedsizelist to List for array functions
+    if fun.name()[0] == "make_array" {
+        expressions = expressions
+            .into_iter()
+            .map(|expr| {
+                let data_type = expr.get_type(schema).unwrap();
+                if let DataType::FixedSizeList(field, _) = data_type {
+                    let field = field.as_ref().clone();
+                    let to_type = DataType::List(Arc::new(field));
+                    expr.cast_to(&to_type, schema)
+                } else {
+                    Ok(expr)
+                }
+            })
+            .collect::<Result<Vec<_>>>()?;
+    }
+
+    if fun.name()[0] == "make_array" {
+        // Find the final data type for the function arguments
+        let current_types = expressions
+            .iter()
+            .map(|e| e.get_type(schema))
+            .collect::<Result<Vec<_>>>()?;
+
+        let new_type = current_types
+            .iter()
+            .skip(1)
+            .fold(current_types.first().unwrap().clone(), |acc, x| {
+                comparison_coercion(&acc, x).unwrap_or(acc)
+            });
+
+        return expressions
+            .iter()
+            .zip(current_types)
+            .map(|(expr, from_type)| cast_array_expr(expr, &from_type, &new_type, schema))
+            .collect();
+    }
+    Ok(expressions)
 }
 
 fn coerce_arguments_for_fun(

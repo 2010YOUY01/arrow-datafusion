@@ -18,8 +18,8 @@
 use super::{Between, Expr, Like};
 use crate::expr::{
     AggregateFunction, AggregateUDF, Alias, BinaryExpr, Cast, GetFieldAccess,
-    GetIndexedField, InList, InSubquery, Placeholder, ScalarFunction, ScalarUDF, Sort,
-    TryCast, WindowFunction,
+    GetIndexedField, InList, InSubquery, Placeholder, ScalarFunction, ScalarFunctionExpr,
+    ScalarUDF, Sort, TryCast, WindowFunction,
 };
 use crate::field_util::GetFieldAccessSchema;
 use crate::type_coercion::binary::get_result_type;
@@ -95,6 +95,14 @@ impl ExprSchemable for Expr {
                     .collect::<Result<Vec<_>>>()?;
 
                 fun.return_type(&data_types)
+            }
+            Expr::ScalarFunctionExpr(ScalarFunctionExpr { fun, args }) => {
+                let data_types = args
+                    .iter()
+                    .map(|e| e.get_type(schema))
+                    .collect::<Result<Vec<_>>>()?;
+
+                Ok((fun.return_type())(&data_types)?.as_ref().clone())
             }
             Expr::WindowFunction(WindowFunction { fun, args, .. }) => {
                 let data_types = args
@@ -230,6 +238,7 @@ impl ExprSchemable for Expr {
             Expr::ScalarVariable(_, _)
             | Expr::TryCast { .. }
             | Expr::ScalarFunction(..)
+            | Expr::ScalarFunctionExpr(..)
             | Expr::ScalarUDF(..)
             | Expr::WindowFunction { .. }
             | Expr::AggregateFunction { .. }

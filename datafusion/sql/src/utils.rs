@@ -118,6 +118,7 @@ fn check_column_satisfies_expr(
     message_prefix: &str,
 ) -> Result<()> {
     if !columns.contains(expr) {
+        println!("FOO");
         return plan_err!(
             "{}: Expression {} could not be resolved from available columns: {}",
             message_prefix,

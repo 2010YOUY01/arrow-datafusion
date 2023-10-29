@@ -45,13 +45,214 @@ use arrow::{
     datatypes::{DataType, Int32Type, Int64Type, Schema},
 };
 use datafusion_common::{internal_err, DataFusionError, Result, ScalarValue};
-pub use datafusion_expr::FuncMonotonicity;
 use datafusion_expr::{
     BuiltinScalarFunction, ColumnarValue, ScalarFunctionImplementation,
 };
+pub use datafusion_expr::{
+    FuncMonotonicity, ReturnTypeFunction, ScalarFunctionDef, TypeSignature, Volatility,
+};
 use std::ops::Neg;
+use std::str::FromStr;
 use std::sync::Arc;
 
+/// `ScalarFunctionDef` is the new interface for builtin scalar functions
+/// This is an adapter between the old and new interface, to use the new interface
+/// for internal execution. Functions are planned to move into new interface gradually
+#[derive(Debug, Clone)]
+pub(crate) struct BuiltinScalarFunctionWrapper {
+    func: Arc<dyn ScalarFunctionDef>,
+    // functions like `now()` requires per-execution properties
+    execution_props: ExecutionProps,
+    // Some function need first argument's type to decide implementation
+    first_arg_type: Option<DataType>,
+}
+
+impl ScalarFunctionDef for BuiltinScalarFunctionWrapper {
+    fn name(&self) -> &[&str] {
+        return self.func.name();
+    }
+
+    fn input_type(&self) -> TypeSignature {
+        return self.func.input_type();
+    }
+
+    fn return_type(&self) -> ReturnTypeFunction {
+        return self.func.return_type();
+    }
+
+    fn volatility(&self) -> Volatility {
+        return self.func.volatility();
+    }
+
+    fn monotonicity(&self) -> Option<FuncMonotonicity> {
+        return self.func.monotonicity();
+    }
+
+    fn use_execute_raw_instead(&self) -> bool {
+        return true;
+    }
+
+    fn execute_raw(&self, _args: &[ColumnarValue]) -> Result<ColumnarValue> {
+        let func_name = self.func.name()[0];
+        let func_enum = BuiltinScalarFunction::from_str(func_name)?;
+
+        match func_enum {
+            // These functions need args and input schema to pick an implementation
+            // Unlike the string functions, which actually figure out the function to use with each array,
+            // here we return either a cast fn or string timestamp translation based on the expression data type
+            // so we don't have to pay a per-array/batch cost.
+            BuiltinScalarFunction::ToTimestamp => match &self.first_arg_type {
+                Some(DataType::Int64) => cast_column(
+                    &_args[0],
+                    &DataType::Timestamp(TimeUnit::Second, None),
+                    None,
+                ),
+                Some(DataType::Timestamp(_, None)) => cast_column(
+                    &_args[0],
+                    &DataType::Timestamp(TimeUnit::Nanosecond, None),
+                    None,
+                ),
+                Some(DataType::Utf8) => datetime_expressions::to_timestamp(&_args),
+                other => {
+                    return internal_err!(
+                        "Unsupported data type {other:?} for function to_timestamp"
+                    );
+                }
+            },
+            BuiltinScalarFunction::ToTimestampMillis => match &self.first_arg_type {
+                Some(DataType::Int64) | Some(DataType::Timestamp(_, None)) => {
+                    cast_column(
+                        &_args[0],
+                        &DataType::Timestamp(TimeUnit::Millisecond, None),
+                        None,
+                    )
+                }
+                Some(DataType::Utf8) => datetime_expressions::to_timestamp_millis(&_args),
+                other => internal_err!(
+                    "Unsupported data type {:?} for function to_timestamp_millis",
+                    other
+                ),
+            },
+            BuiltinScalarFunction::ToTimestampMicros => match &self.first_arg_type {
+                Some(DataType::Int64) | Some(DataType::Timestamp(_, None)) => {
+                    cast_column(
+                        &_args[0],
+                        &DataType::Timestamp(TimeUnit::Microsecond, None),
+                        None,
+                    )
+                }
+                Some(DataType::Utf8) => datetime_expressions::to_timestamp_micros(&_args),
+                other => internal_err!(
+                    "Unsupported data type {:?} for function to_timestamp_micros",
+                    other
+                ),
+            },
+            BuiltinScalarFunction::ToTimestampNanos => match &self.first_arg_type {
+                Some(DataType::Int64) | Some(DataType::Timestamp(_, None)) => {
+                    cast_column(
+                        &_args[0],
+                        &DataType::Timestamp(TimeUnit::Nanosecond, None),
+                        None,
+                    )
+                }
+                Some(DataType::Utf8) => datetime_expressions::to_timestamp_nanos(&_args),
+                other => {
+                    return internal_err!(
+                        "Unsupported data type {other:?} for function to_timestamp_nanos"
+                    );
+                }
+            },
+            BuiltinScalarFunction::ToTimestampSeconds => match &self.first_arg_type {
+                Some(DataType::Int64) | Some(DataType::Timestamp(_, None)) => {
+                    cast_column(
+                        &_args[0],
+                        &DataType::Timestamp(TimeUnit::Second, None),
+                        None,
+                    )
+                }
+                Some(DataType::Utf8) => {
+                    datetime_expressions::to_timestamp_seconds(&_args)
+                }
+                other => internal_err!(
+                    "Unsupported data type {:?} for function to_timestamp_seconds",
+                    other
+                ),
+            },
+            BuiltinScalarFunction::FromUnixtime => match &self.first_arg_type {
+                Some(DataType::Int64) => cast_column(
+                    &_args[0],
+                    &DataType::Timestamp(TimeUnit::Second, None),
+                    None,
+                ),
+                other => internal_err!(
+                    "Unsupported data type {:?} for function from_unixtime",
+                    other
+                ),
+            },
+            BuiltinScalarFunction::ArrowTypeof => match &self.first_arg_type {
+                Some(input_data_type) => Ok(ColumnarValue::Scalar(ScalarValue::Utf8(
+                    Some(format!("{:?}", input_data_type)),
+                ))),
+                other => internal_err!(
+                    "Unsupported data type {:?} for function arrowtypeof",
+                    other
+                ),
+            },
+            BuiltinScalarFunction::Abs => match &self.first_arg_type {
+                Some(input_data_type) => {
+                    let abs_fun = math_expressions::create_abs_function(input_data_type)?;
+                    make_scalar_function(abs_fun)(&_args)
+                }
+                other => {
+                    internal_err!("Unsupported data type {:?} for function abs", other)
+                }
+            },
+            // These don't need args and input schema
+            _ => create_physical_fun(&func_enum, &self.execution_props)?(&_args),
+        }
+    }
+}
+
+impl BuiltinScalarFunctionWrapper {
+    pub(crate) fn new(
+        func: Arc<dyn ScalarFunctionDef>,
+        execution_props: ExecutionProps,
+        first_arg_type: Option<DataType>,
+    ) -> Self {
+        BuiltinScalarFunctionWrapper {
+            func,
+            execution_props,
+            first_arg_type,
+        }
+    }
+
+    pub(crate) fn create_physical_expr(
+        &self,
+        input_phy_exprs: &[Arc<dyn PhysicalExpr>],
+        input_schema: &Schema,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        let input_expr_types = input_phy_exprs
+            .iter()
+            .map(|e| e.data_type(input_schema))
+            .collect::<Result<Vec<_>>>()?;
+
+        let data_type = self.return_type()(&input_expr_types)?;
+
+        let func_def_clone = self.clone();
+        let fun_expr: ScalarFunctionImplementation =
+            Arc::new(move |args: &[ColumnarValue]| func_def_clone.execute_raw(args));
+
+        Ok(Arc::new(ScalarFunctionExpr::new(
+            &self.name()[0],
+            fun_expr,
+            input_phy_exprs.to_vec(),
+            &data_type,
+            self.monotonicity(),
+        )))
+    }
+}
+
+// TODO(PR): deprecate
 /// Create a physical (function) expression.
 /// This function errors when `args`' can't be coerced to a valid argument type of the function.
 pub fn create_physical_expr(
@@ -65,7 +266,7 @@ pub fn create_physical_expr(
         .map(|e| e.data_type(input_schema))
         .collect::<Result<Vec<_>>>()?;
 
-    let data_type = fun.return_type(&input_expr_types)?;
+    let data_type = BuiltinScalarFunction::return_type(fun.clone(), &input_expr_types)?;
 
     let fun_expr: ScalarFunctionImplementation = match fun {
         // These functions need args and input schema to pick an implementation
