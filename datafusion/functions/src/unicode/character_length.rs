@@ -15,10 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::string::common::StringArrayType;
 use crate::utils::{make_scalar_function, utf8_to_int_type};
 use arrow::array::{
-    Array, ArrayAccessor, ArrayIter, ArrayRef, ArrowPrimitiveType, AsArray,
-    OffsetSizeTrait, PrimitiveArray,
+    Array, ArrayRef, ArrowPrimitiveType, AsArray, OffsetSizeTrait, PrimitiveArray,
 };
 use arrow::datatypes::{ArrowNativeType, DataType, Int32Type, Int64Type};
 use datafusion_common::Result;
@@ -99,18 +99,27 @@ fn character_length(args: &[ArrayRef]) -> Result<ArrayRef> {
     }
 }
 
-fn character_length_general<'a, T: ArrowPrimitiveType, V: ArrayAccessor<Item = &'a str>>(
+fn character_length_general<'a, T: ArrowPrimitiveType, V: StringArrayType<'a>>(
     array: V,
 ) -> Result<ArrayRef>
 where
     T::Native: OffsetSizeTrait,
 {
-    let iter = ArrayIter::new(array);
+    let is_array_ascii_only = array.is_ascii();
+    // let is_array_ascii_only = false;
+    let iter = array.iter();
     let result = iter
         .map(|string| {
             string.map(|string: &str| {
-                T::Native::from_usize(string.chars().count())
-                    .expect("should not fail as string.chars will always return integer")
+                if is_array_ascii_only {
+                    T::Native::from_usize(string.len()).expect(
+                        "should not fail as string.len will always return integer",
+                    )
+                } else {
+                    T::Native::from_usize(string.chars().count()).expect(
+                        "should not fail as string.chars will always return integer",
+                    )
+                }
             })
         })
         .collect::<PrimitiveArray<T>>();
