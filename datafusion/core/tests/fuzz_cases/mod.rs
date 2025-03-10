@@ -29,3 +29,6 @@ mod pruning;
 mod limit_fuzz;
 mod sort_preserving_repartition_fuzz;
 mod window_fuzz;
+
+// Utility modules
+mod record_batch_generator;
