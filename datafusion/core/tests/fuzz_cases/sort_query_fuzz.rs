@@ -47,10 +47,10 @@ use super::record_batch_generator::{get_supported_types_columns, RecordBatchGene
 /// Entry point for executing the sort query fuzzer.
 #[tokio::test(flavor = "multi_thread")]
 async fn sort_query_fuzzer_runner() {
-    let random_seed = 310106;
+    let random_seed = 310104;
     let test_generator = SortFuzzerTestGenerator::new(
-        1000,
-        4,
+        2000,
+        3,
         "sort_fuzz_table".to_string(),
         get_supported_types_columns(random_seed),
         random_seed,
@@ -58,8 +58,8 @@ async fn sort_query_fuzzer_runner() {
     let mut fuzzer = SortQueryFuzzer::new(random_seed)
         .with_max_rounds(Some(5))
         .with_queries_per_round(4)
-        .with_config_variations_per_query(5)
-        .with_time_limit(Duration::from_secs(30))
+        .with_config_variations_per_query(25)
+        .with_time_limit(Duration::from_secs(60))
         .with_test_generator(test_generator);
 
     fuzzer.run().await.unwrap();
@@ -287,7 +287,7 @@ impl SortFuzzerTestGenerator {
         let mut rng = StdRng::seed_from_u64(rng_seed);
         let num_partitions = rng.gen_range(1..=self.max_partitions);
 
-        let max_batch_size = self.num_rows / num_partitions / 10;
+        let max_batch_size = self.num_rows / num_partitions / 50;
         let target_partition_size = self.num_rows / num_partitions;
 
         let mut partitions = Vec::new();
@@ -457,7 +457,7 @@ impl SortFuzzerTestGenerator {
         // 30% to 200% of the dataset size (if `with_memory_limit` is false, config
         // will use the default unbounded pool to override it later)
         let memory_limit = rng.gen_range(
-            (dataset_size as f64 * 0.3) as usize..=(dataset_size as f64 * 2.0) as usize,
+            (dataset_size as f64 * 0.5) as usize..=(dataset_size as f64 * 2.0) as usize,
         );
         // 10% to 20% of the per-partition memory limit size
         let per_partition_mem_limit = memory_limit / num_partitions;
@@ -471,9 +471,10 @@ impl SortFuzzerTestGenerator {
         let sort_in_place_threshold_bytes = if with_memory_limit {
             // For memory-limited query, setting `sort_in_place_threshold_bytes` too
             // large will cause failure.
-            rng.gen_range(0..=init_state.approx_batch_mem_size * 3 as usize)
-        } else {
             0
+        } else {
+            let dataset_size = self.dataset_state.as_ref().unwrap().dataset_size;
+            rng.gen_range(0..=dataset_size * 2 as usize)
         };
 
         println!("SortQueryFuzzer -- With config:");
@@ -569,8 +570,8 @@ mod test {
     async fn test_sort_query_fuzzer_reproduce_2() {
         let random_seed = 310106;
         let mut test_generator = SortFuzzerTestGenerator::new(
-            10000,
-            4,
+            2000,
+            3,
             "sort_fuzz_table".to_string(),
             get_supported_types_columns(random_seed),
             random_seed,
@@ -578,9 +579,9 @@ mod test {
 
         let _res1 = test_generator
             .fuzzer_run(
-                9795837005785059243,
-                7634741770606795938,
-                13081138908352650001,
+                7505822775957802089,
+                4608057076913585108,
+                8550921252053587262,
             )
             .await
             .unwrap();

@@ -60,6 +60,16 @@ use datafusion_physical_expr_common::sort_expr::LexRequirement;
 
 use futures::{StreamExt, TryStreamExt};
 use log::{debug, trace};
+use std::sync::Once;
+
+macro_rules! print_once {
+    ($($arg:tt)*) => {{
+        static ONCE: Once = Once::new();
+        ONCE.call_once(|| {
+            println!($($arg)*);
+        });
+    }};
+}
 
 struct ExternalSorterMetrics {
     /// metrics
@@ -311,6 +321,7 @@ impl ExternalSorter {
         self.reserve_memory_for_merge()?;
 
         let size = get_reserved_byte_for_record_batch(&input);
+        print_once!("====DBG: insert_batch reserve(2x) size: {}", size);
         if self.reservation.try_grow(size).is_err() {
             self.sort_or_spill_in_mem_batches(false).await?;
             // We've already freed more than half of reserved memory,
@@ -360,6 +371,8 @@ impl ExternalSorter {
                 let stream = self.spill_manager.read_spill_as_stream(spill)?;
                 streams.push(stream);
             }
+
+            println!("DBG: Final spill streams degree is {}", &streams.len());
 
             let expressions: LexOrdering = self.expr.iter().cloned().collect();
 
@@ -539,6 +552,10 @@ impl ExternalSorter {
 
         let mut sorted_stream =
             self.in_mem_sort_stream(self.metrics.baseline.intermediate())?;
+        // After `in_mem_sort_stream()`, all in_mem_batches are taken to build a
+        // globally sorted stream, and it will be consumed by the following loop.
+        assert_eq!(self.in_mem_batches.len(), 0);
+        self.in_mem_batches_sorted = true;
 
         // `self.in_mem_batches` is already taken away by the sort_stream, now it is empty.
         // We'll gradually collect the sorted stream into self.in_mem_batches, or directly
@@ -556,7 +573,6 @@ impl ExternalSorter {
                 spilled = true;
             } else {
                 self.in_mem_batches.push(batch);
-                self.in_mem_batches_sorted = true;
             }
         }
 
@@ -680,7 +696,7 @@ impl ExternalSorter {
             return self.sort_batch_stream(batch, metrics, reservation);
         }
 
-        let streams = std::mem::take(&mut self.in_mem_batches)
+        let streams: Vec<_> = std::mem::take(&mut self.in_mem_batches)
             .into_iter()
             .map(|batch| {
                 let metrics = self.metrics.baseline.intermediate();
@@ -691,6 +707,8 @@ impl ExternalSorter {
                 Ok(spawn_buffered(input, 1))
             })
             .collect::<Result<_>>()?;
+
+        println!("DBG: partial sort merge degree is {}", &streams.len());
 
         let expressions: LexOrdering = self.expr.iter().cloned().collect();
 
