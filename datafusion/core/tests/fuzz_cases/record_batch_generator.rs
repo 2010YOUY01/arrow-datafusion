@@ -27,15 +27,89 @@ use arrow::datatypes::{
     TimestampNanosecondType, TimestampSecondType, UInt16Type, UInt32Type, UInt64Type,
     UInt8Type,
 };
-use datafusion_common::{arrow_datafusion_err, DataFusionError, Result};
-use rand::{
-    rngs::{StdRng, ThreadRng},
-    thread_rng, Rng, SeedableRng,
+use arrow_schema::{
+    DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE, DECIMAL256_MAX_PRECISION,
+    DECIMAL256_MAX_SCALE,
 };
+use datafusion_common::{arrow_datafusion_err, DataFusionError, Result};
+use rand::{rngs::StdRng, thread_rng, Rng, SeedableRng};
 use test_utils::array_gen::{
     BinaryArrayGenerator, BooleanArrayGenerator, DecimalArrayGenerator,
     PrimitiveArrayGenerator, StringArrayGenerator,
 };
+
+/// Columns that are supported by the record batch generator
+/// The RNG is used to generate the precision and scale for the decimal columns, thread
+/// RNG is not used because this is used in fuzzing and deterministic results are preferred
+pub fn get_supported_types_columns(rng_seed: u64) -> Vec<ColumnDescr> {
+    let mut rng = StdRng::seed_from_u64(rng_seed);
+    vec![
+        ColumnDescr::new("i8", DataType::Int8),
+        ColumnDescr::new("i16", DataType::Int16),
+        ColumnDescr::new("i32", DataType::Int32),
+        ColumnDescr::new("i64", DataType::Int64),
+        ColumnDescr::new("u8", DataType::UInt8),
+        ColumnDescr::new("u16", DataType::UInt16),
+        ColumnDescr::new("u32", DataType::UInt32),
+        ColumnDescr::new("u64", DataType::UInt64),
+        ColumnDescr::new("date32", DataType::Date32),
+        ColumnDescr::new("date64", DataType::Date64),
+        ColumnDescr::new("time32_s", DataType::Time32(TimeUnit::Second)),
+        ColumnDescr::new("time32_ms", DataType::Time32(TimeUnit::Millisecond)),
+        ColumnDescr::new("time64_us", DataType::Time64(TimeUnit::Microsecond)),
+        ColumnDescr::new("time64_ns", DataType::Time64(TimeUnit::Nanosecond)),
+        ColumnDescr::new("timestamp_s", DataType::Timestamp(TimeUnit::Second, None)),
+        ColumnDescr::new(
+            "timestamp_ms",
+            DataType::Timestamp(TimeUnit::Millisecond, None),
+        ),
+        ColumnDescr::new(
+            "timestamp_us",
+            DataType::Timestamp(TimeUnit::Microsecond, None),
+        ),
+        ColumnDescr::new(
+            "timestamp_ns",
+            DataType::Timestamp(TimeUnit::Nanosecond, None),
+        ),
+        ColumnDescr::new("float32", DataType::Float32),
+        ColumnDescr::new("float64", DataType::Float64),
+        ColumnDescr::new(
+            "interval_year_month",
+            DataType::Interval(IntervalUnit::YearMonth),
+        ),
+        ColumnDescr::new(
+            "interval_day_time",
+            DataType::Interval(IntervalUnit::DayTime),
+        ),
+        ColumnDescr::new(
+            "interval_month_day_nano",
+            DataType::Interval(IntervalUnit::MonthDayNano),
+        ),
+        ColumnDescr::new("decimal128", {
+            let precision: u8 = rng.gen_range(1..=DECIMAL128_MAX_PRECISION);
+            let scale: i8 = rng.gen_range(
+                i8::MIN..=std::cmp::min(precision as i8, DECIMAL128_MAX_SCALE),
+            );
+            DataType::Decimal128(precision, scale)
+        }),
+        ColumnDescr::new("decimal256", {
+            let precision: u8 = rng.gen_range(1..=DECIMAL256_MAX_PRECISION);
+            let scale: i8 = rng.gen_range(
+                i8::MIN..=std::cmp::min(precision as i8, DECIMAL256_MAX_SCALE),
+            );
+            DataType::Decimal256(precision, scale)
+        }),
+        ColumnDescr::new("utf8", DataType::Utf8),
+        ColumnDescr::new("largeutf8", DataType::LargeUtf8),
+        ColumnDescr::new("utf8view", DataType::Utf8View),
+        ColumnDescr::new("u8_low", DataType::UInt8).with_max_num_distinct(10),
+        ColumnDescr::new("utf8_low", DataType::Utf8).with_max_num_distinct(10),
+        ColumnDescr::new("bool", DataType::Boolean),
+        ColumnDescr::new("binary", DataType::Binary),
+        ColumnDescr::new("large_binary", DataType::LargeBinary),
+        ColumnDescr::new("binaryview", DataType::BinaryView),
+    ]
+}
 
 #[derive(Debug, Clone)]
 pub struct ColumnDescr {
@@ -73,13 +147,19 @@ impl ColumnDescr {
 
 /// Record batch generator
 pub struct RecordBatchGenerator {
-    pub min_rows_nun: usize,
+    pub min_rows_num: usize,
 
     pub max_rows_num: usize,
 
     pub columns: Vec<ColumnDescr>,
 
     pub candidate_null_pcts: Vec<f64>,
+
+    /// If a seed is provided when constructing the generator, it will be used to
+    /// create `rng` and the pseudo-randomly generated batches will be deterministic.
+    /// Otherwise, `rng` will be initialized using `thread_rng()` and the batches
+    /// generated will be different each time.
+    rng: StdRng,
 }
 
 macro_rules! generate_decimal_array {
@@ -137,6 +217,8 @@ macro_rules! generate_primitive_array {
 }
 
 impl RecordBatchGenerator {
+    /// Create a new `RecordBatchGenerator` with a random seed. The generated
+    /// batches will be different each time.
     pub fn new(
         min_rows_nun: usize,
         max_rows_num: usize,
@@ -145,25 +227,34 @@ impl RecordBatchGenerator {
         let candidate_null_pcts = vec![0.0, 0.01, 0.1, 0.5];
 
         Self {
-            min_rows_nun,
+            min_rows_num: min_rows_nun,
             max_rows_num,
             columns,
             candidate_null_pcts,
+            rng: StdRng::from_rng(thread_rng()).unwrap(),
         }
     }
 
-    pub fn generate(&self) -> Result<RecordBatch> {
-        let mut rng = thread_rng();
-        let num_rows = rng.gen_range(self.min_rows_nun..=self.max_rows_num);
-        let array_gen_rng = StdRng::from_seed(rng.gen());
+    /// Set a seed for the generator. The pseudo-randomly generated batches will be
+    /// deterministic for the same seed.
+    pub fn with_seed(mut self, seed: u64) -> Self {
+        self.rng = StdRng::seed_from_u64(seed);
+        self
+    }
+
+    pub fn generate(&mut self) -> Result<RecordBatch> {
+        let num_rows = self.rng.gen_range(self.min_rows_num..=self.max_rows_num);
+        let array_gen_rng = StdRng::from_seed(self.rng.gen());
+        let mut batch_gen_rng = StdRng::from_seed(self.rng.gen());
+        let columns = self.columns.clone();
 
         // Build arrays
-        let mut arrays = Vec::with_capacity(self.columns.len());
-        for col in self.columns.iter() {
+        let mut arrays = Vec::with_capacity(columns.len());
+        for col in columns.iter() {
             let array = self.generate_array_of_type(
                 col,
                 num_rows,
-                &mut rng,
+                &mut batch_gen_rng,
                 array_gen_rng.clone(),
             );
             arrays.push(array);
@@ -181,10 +272,10 @@ impl RecordBatchGenerator {
     }
 
     fn generate_array_of_type(
-        &self,
+        &mut self,
         col: &ColumnDescr,
         num_rows: usize,
-        batch_gen_rng: &mut ThreadRng,
+        batch_gen_rng: &mut StdRng,
         array_gen_rng: StdRng,
     ) -> ArrayRef {
         let num_distinct = if num_rows > 1 {
@@ -509,5 +600,41 @@ impl RecordBatchGenerator {
                 panic!("Unsupported data generator type: {}", col.column_type)
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_generator_with_fixed_seed_deterministic() {
+        let mut gen1 = RecordBatchGenerator::new(
+            16,
+            32,
+            vec![
+                ColumnDescr::new("a", DataType::Utf8),
+                ColumnDescr::new("b", DataType::UInt32),
+            ],
+        )
+        .with_seed(310104);
+
+        let mut gen2 = RecordBatchGenerator::new(
+            16,
+            32,
+            vec![
+                ColumnDescr::new("a", DataType::Utf8),
+                ColumnDescr::new("b", DataType::UInt32),
+            ],
+        )
+        .with_seed(310104);
+
+        let batch1 = gen1.generate().unwrap();
+        let batch2 = gen2.generate().unwrap();
+
+        let batch1_formatted = format!("{:?}", batch1);
+        let batch2_formatted = format!("{:?}", batch2);
+
+        assert_eq!(batch1_formatted, batch2_formatted);
     }
 }

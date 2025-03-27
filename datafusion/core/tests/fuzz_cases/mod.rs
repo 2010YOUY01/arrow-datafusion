@@ -20,6 +20,7 @@ mod distinct_count_string_fuzz;
 mod join_fuzz;
 mod merge_fuzz;
 mod sort_fuzz;
+mod sort_query_fuzz;
 
 mod aggregation_fuzzer;
 mod equivalence;

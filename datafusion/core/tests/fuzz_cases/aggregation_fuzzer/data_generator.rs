@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-
 use arrow::array::RecordBatch;
 use arrow::datatypes::DataType;
 use datafusion_common::Result;
@@ -136,7 +135,7 @@ impl DatasetGenerator {
         }
     }
 
-    pub fn generate(&self) -> Result<Vec<Dataset>> {
+    pub fn generate(&mut self) -> Result<Vec<Dataset>> {
         let mut datasets = Vec::with_capacity(self.sort_keys_set.len() + 1);
 
         // Generate the base batch (unsorted)
@@ -212,7 +211,7 @@ mod test {
             sort_keys_set: vec![vec!["b".to_string()]],
         };
 
-        let gen = DatasetGenerator::new(config);
+        let mut gen = DatasetGenerator::new(config);
         let datasets = gen.generate().unwrap();
 
         // Should Generate 2 datasets
