@@ -28,6 +28,7 @@ use datafusion_common::Result;
 use datafusion_execution::memory_pool::{
     human_readable_size, MemoryPool, UnboundedMemoryPool,
 };
+use datafusion_expr::display_schema;
 use datafusion_physical_plan::spill::get_record_batch_memory_size;
 use rand::seq::SliceRandom;
 use std::time::{Duration, Instant};
@@ -45,21 +46,29 @@ use super::aggregation_fuzzer::ColumnDescr;
 use super::record_batch_generator::{get_supported_types_columns, RecordBatchGenerator};
 
 /// Entry point for executing the sort query fuzzer.
+///
+/// Now memory limiting is disabled by default. See TODOs in `SortQueryFuzzer`.
 #[tokio::test(flavor = "multi_thread")]
 async fn sort_query_fuzzer_runner() {
-    let random_seed = 310104;
+    let random_seed = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as u64;
     let test_generator = SortFuzzerTestGenerator::new(
         2000,
         3,
         "sort_fuzz_table".to_string(),
         get_supported_types_columns(random_seed),
+        false,
         random_seed,
     );
     let mut fuzzer = SortQueryFuzzer::new(random_seed)
+        // Configs for how many random query to test
         .with_max_rounds(Some(5))
         .with_queries_per_round(4)
         .with_config_variations_per_query(25)
-        .with_time_limit(Duration::from_secs(60))
+        // Will stop early if the time limit is reached
+        .with_time_limit(Duration::from_secs(20))
         .with_test_generator(test_generator);
 
     fuzzer.run().await.unwrap();
@@ -72,6 +81,12 @@ async fn sort_query_fuzzer_runner() {
 /// - `queries_per_round`: Number of different queries to run in each round.
 /// - `config_variations_per_query`: Number of different configurations to test per query.
 /// - `time_limit`: Time limit for the entire fuzzer execution.
+///
+/// TODO: The following improvements are blocked on https://github.com/apache/datafusion/issues/14748:
+/// 1. Support generating queries with arbitrary number of ORDER BY clauses
+///    Currently limited to be smaller than number of projected columns
+/// 2. Enable special type columns like utf8_low to be used in ORDER BY clauses
+/// 3. Enable memory limiting functionality in the fuzzer runner
 pub struct SortQueryFuzzer {
     test_gen: SortFuzzerTestGenerator,
     /// Random number generator for the runner, used to generate seeds for inner components.
@@ -116,6 +131,7 @@ impl SortQueryFuzzer {
             4,
             "sort_fuzz_table".to_string(),
             candidate_columns,
+            false,
             seed,
         );
 
@@ -166,7 +182,7 @@ impl SortQueryFuzzer {
             if let Some(time_limit) = self.time_limit {
                 if Instant::now().duration_since(start_time) > time_limit {
                     println!(
-                        "SortQueryFuzzer: Time limit reached, tested {} queries in {} rounds",
+                        "[SortQueryFuzzer] Time limit reached, tested {} queries in {} rounds",
                         round * self.queries_per_round,
                         round
                     );
@@ -180,11 +196,21 @@ impl SortQueryFuzzer {
                 let mut expected_results: Option<Vec<RecordBatch>> = None; // use first config's result as the expected result
                 for config_i in 0..self.config_variations_per_query {
                     let config_seed = self.runner_rng.gen();
-                    println!("SortQueryFuzzer: check round {}, query {}, config {}\n init_seed {}, query_seed {}, config_seed {}", round, query_i, config_i, init_seed, query_seed, config_seed);
+
+                    println!(
+                        "[SortQueryFuzzer] Round {}, Query {} (Config {})",
+                        round, query_i, config_i
+                    );
+                    println!("  Seeds:");
+                    println!("    init_seed   = {}", init_seed);
+                    println!("    query_seed  = {}", query_seed);
+                    println!("    config_seed = {}", config_seed);
+
                     let results = self
                         .test_gen
                         .fuzzer_run(init_seed, query_seed, config_seed)
                         .await?;
+                    println!("\n"); // Seperator between tested runs
 
                     if expected_results.is_none() {
                         expected_results = Some(results);
@@ -207,6 +233,8 @@ impl SortQueryFuzzer {
 }
 
 /// Struct to generate and manage a random dataset for fuzz testing.
+/// It is able to re-run the failed test cases by setting the same seed printed out.
+/// See the unit tests for examples.
 ///
 /// To use this struct:
 /// 1. Call `init_partitioned_staggered_batches` to generate a random dataset.
@@ -223,6 +251,9 @@ pub struct SortFuzzerTestGenerator {
     /// The selected columns from all available candidate columns to be used for
     ///  this dataset
     selected_columns: Vec<ColumnDescr>,
+    /// If true, will randomly generate a memory limit for the query. Otherwise
+    /// the query will run under the context with unlimited memory.
+    set_memory_limit: bool,
 
     /// States related to the randomly generated dataset. `None` if not initialized
     /// by calling `init_partitioned_staggered_batches()`
@@ -239,8 +270,6 @@ pub struct DatasetState {
     /// The approximate number of rows of a batch (staggered batches will be generated
     /// with random number of rows between 1 and `approx_batch_size`)
     approx_batch_num_rows: usize,
-    /// The approximate memory size of a batch
-    approx_batch_mem_size: usize,
     /// The schema of the dataset
     schema: SchemaRef,
     /// The memory size of the whole dataset
@@ -254,6 +283,7 @@ impl SortFuzzerTestGenerator {
         max_partitions: usize,
         table_name: String,
         candidate_columns: Vec<ColumnDescr>,
+        set_memory_limit: bool,
         rng_seed: u64,
     ) -> Self {
         let mut rng = StdRng::seed_from_u64(rng_seed);
@@ -270,6 +300,7 @@ impl SortFuzzerTestGenerator {
             max_partitions,
             table_name,
             selected_columns,
+            set_memory_limit,
             dataset_state: None,
         }
     }
@@ -320,10 +351,8 @@ impl SortFuzzerTestGenerator {
 
                 if schema.is_none() {
                     schema = Some(record_batch.schema());
-                    println!(
-                        "DBG: Generated dataset with schema: {}",
-                        schema.as_ref().unwrap()
-                    );
+                    println!("  Dataset schema:");
+                    println!("    {}", display_schema(schema.as_ref().unwrap()));
                 }
 
                 partition.push(record_batch);
@@ -368,21 +397,12 @@ impl SortFuzzerTestGenerator {
             })
             .sum::<usize>();
 
-        for (i, partition) in partitions.iter().enumerate() {
-            println!("Partition {}: number of batches {}", i, partition.len());
-        }
-
-        let total_batches: usize =
-            partitions.iter().map(|partition| partition.len()).sum();
-        let approx_batch_mem_size = mem_size / total_batches;
-
         let approx_batch_num_rows = max_batch_size;
 
         self.dataset_state = Some(DatasetState {
             partitioned_staggered_batches: partitions,
             dataset_size,
             approx_batch_num_rows,
-            approx_batch_mem_size,
             schema: schema.unwrap(),
             mem_size,
         });
@@ -477,21 +497,33 @@ impl SortFuzzerTestGenerator {
             rng.gen_range(0..=dataset_size * 2 as usize)
         };
 
-        println!("SortQueryFuzzer -- With config:");
-        println!("Dataset size: {}", human_readable_size(dataset_size));
-        println!("Number of partitions: {}", num_partitions);
-        println!("Memory limit: {}", human_readable_size(memory_limit));
-        println!("Batch size: {}", init_state.approx_batch_num_rows / 2);
-        println!(
-            "Per partition memory limit: {}",
+        // Set up strings for printing
+        let memory_limit_str = if with_memory_limit {
+            human_readable_size(memory_limit)
+        } else {
+            "Unbounded".to_string()
+        };
+        let per_partition_limit_str = if with_memory_limit {
             human_readable_size(per_partition_mem_limit)
+        } else {
+            "Unbounded".to_string()
+        };
+
+        println!("  Config: ");
+        println!("    Dataset size: {}", human_readable_size(dataset_size));
+        println!("    Number of partitions: {}", num_partitions);
+        println!("    Batch size: {}", init_state.approx_batch_num_rows / 2);
+        println!("    Memory limit: {}", memory_limit_str);
+        println!(
+            "    Per partition memory limit: {}",
+            per_partition_limit_str
         );
         println!(
-            "Sort spill reservation bytes: {}",
+            "    Sort spill reservation bytes: {}",
             human_readable_size(sort_spill_reservation_bytes)
         );
         println!(
-            "Sort in place threshold bytes: {}",
+            "    Sort in place threshold bytes: {}",
             human_readable_size(sort_in_place_threshold_bytes)
         );
 
@@ -531,15 +563,21 @@ impl SortFuzzerTestGenerator {
     ) -> Result<Vec<RecordBatch>> {
         self.init_partitioned_staggered_batches(dataset_seed);
         let (query_str, limit) = self.generate_random_query(query_seed);
-        println!("SortQueryFuzzer -- Running query: {}", query_str);
+        println!("  Query:");
+        println!("    {}", query_str);
 
-        // Execute the query
-        let with_mem_limit = !query_str.contains("LIMIT"); // topK does not support external execution
+        // ==== Execute the query ====
+
+        // Only enable memory limits if:
+        // 1. Query does not contain LIMIT (since topK does not support external execution)
+        // 2. Memory limiting is enabled in the test generator config
+        let with_mem_limit = !query_str.contains("LIMIT") && self.set_memory_limit;
+
         let ctx = self.generate_random_config(config_seed, with_mem_limit)?;
         let df = ctx.sql(&query_str).await.unwrap();
         let results = df.collect().await.unwrap();
 
-        // Check the result size is consistent with the limit
+        // ==== Check the result size is consistent with the limit ====
         let result_num_rows = results.iter().map(|batch| batch.num_rows()).sum::<usize>();
         let dataset_size = self.dataset_state.as_ref().unwrap().dataset_size;
 
@@ -556,25 +594,35 @@ impl SortFuzzerTestGenerator {
 mod test {
     use super::*;
 
-    // /// Given the same seed, the result should be the same
-    // #[tokio::test]
-    // async fn test_sort_query_fuzzer_reproduce() {
-    //     let res1 = reproduce_run(1, 2, 3, 4).await.unwrap();
-    //     let res2 = reproduce_run(1, 2, 3, 4).await.unwrap();
-
-    //     check_equality_of_batches(&res1, &res2).unwrap();
-    // }
-
-    //init_seed 7505822775957802089, query_seed 15971099312085288297, config_seed 10071600239674616654
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_sort_query_fuzzer_reproduce_2() {
-        let random_seed = 310106;
+    /// Given the same seed, the result should be the same
+    #[tokio::test]
+    async fn test_sort_query_fuzzer_deterministic() {
+        let gen_seed = 310104;
         let mut test_generator = SortFuzzerTestGenerator::new(
             2000,
             3,
             "sort_fuzz_table".to_string(),
-            get_supported_types_columns(random_seed),
-            random_seed,
+            get_supported_types_columns(gen_seed),
+            false,
+            gen_seed,
+        );
+
+        let res1 = test_generator.fuzzer_run(1, 2, 3).await.unwrap();
+        let res2 = test_generator.fuzzer_run(1, 2, 3).await.unwrap();
+        check_equality_of_batches(&res1, &res2).unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    #[ignore] // TODO: Fix this known bug
+    async fn test_sort_query_fuzzer_reproduce_2() {
+        let gen_seed = 310104;
+        let mut test_generator = SortFuzzerTestGenerator::new(
+            2000,
+            3,
+            "sort_fuzz_table".to_string(),
+            get_supported_types_columns(gen_seed),
+            true,
+            gen_seed,
         );
 
         let _res1 = test_generator

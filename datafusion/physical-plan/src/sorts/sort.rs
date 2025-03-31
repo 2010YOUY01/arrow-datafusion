@@ -62,16 +62,6 @@ use datafusion_physical_expr_common::sort_expr::LexRequirement;
 
 use futures::{StreamExt, TryStreamExt};
 use log::{debug, trace};
-use std::sync::Once;
-
-macro_rules! print_once {
-    ($($arg:tt)*) => {{
-        static ONCE: Once = Once::new();
-        ONCE.call_once(|| {
-            println!($($arg)*);
-        });
-    }};
-}
 
 struct ExternalSorterMetrics {
     /// metrics
@@ -339,7 +329,6 @@ impl ExternalSorter {
         self.reserve_memory_for_merge()?;
 
         let size = get_reserved_byte_for_record_batch(&input);
-        print_once!("====DBG: insert_batch reserve(2x) size: {}", size);
         if self.reservation.try_grow(size).is_err() {
             self.sort_or_spill_in_mem_batches(false).await?;
             // We've already freed more than half of reserved memory,
@@ -388,8 +377,6 @@ impl ExternalSorter {
                 let stream = self.spill_manager.read_spill_as_stream(spill)?;
                 streams.push(stream);
             }
-
-            println!("DBG: Final spill streams degree is {}", &streams.len());
 
             let expressions: LexOrdering = self.expr.iter().cloned().collect();
 
@@ -744,8 +731,6 @@ impl ExternalSorter {
                 Ok(spawn_buffered(input, 1))
             })
             .collect::<Result<_>>()?;
-
-        println!("DBG: partial sort merge degree is {}", &streams.len());
 
         let expressions: LexOrdering = self.expr.iter().cloned().collect();
 
