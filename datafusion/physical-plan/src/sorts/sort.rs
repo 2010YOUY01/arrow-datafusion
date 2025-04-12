@@ -48,7 +48,7 @@ use arrow::array::{Array, RecordBatch, RecordBatchOptions, StringViewArray};
 use arrow::compute::{concat_batches, lexsort_to_indices, take_arrays};
 use arrow::datatypes::SchemaRef;
 use datafusion_common::config::SpillCompression;
-use datafusion_common::{internal_datafusion_err, internal_err, DataFusionError, Result};
+use datafusion_common::{config_err, internal_datafusion_err, internal_err, DataFusionError, Result};
 use datafusion_execution::disk_manager::RefCountedTempFile;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::runtime_env::RuntimeEnv;
@@ -58,7 +58,7 @@ use datafusion_physical_expr::LexOrdering;
 use datafusion_physical_expr::PhysicalExpr;
 
 use futures::{StreamExt, TryStreamExt};
-use log::{debug, trace};
+use log::trace;
 
 struct ExternalSorterMetrics {
     /// metrics
@@ -1306,6 +1306,16 @@ impl ExecutionPlan for SortExec {
                 )))
             }
             (false, None) => {
+                // Validate `ExecutionOptions::sort_max_spill_merge_degree` (must be >= 2)
+                let spill_max_merge_degree =
+                    execution_options.sort_max_spill_merge_degree;
+                if spill_max_merge_degree < 2 {
+                    return config_err!(
+                        "sort_max_spill_merge_degree must be >= 2 in order to continue external sorting, but got {}",
+                        spill_max_merge_degree
+                    );
+                }
+
                 let mut sorter = ExternalSorter::new(
                     partition,
                     input.schema(),
@@ -1314,7 +1324,7 @@ impl ExecutionPlan for SortExec {
                     execution_options.sort_spill_reservation_bytes,
                     execution_options.sort_in_place_threshold_bytes,
                     context.session_config().spill_compression(),
-                    execution_options.sort_max_spill_merge_degree,
+                    spill_max_merge_degree,
                     &self.metrics_set,
                     context.runtime_env(),
                 )?;
