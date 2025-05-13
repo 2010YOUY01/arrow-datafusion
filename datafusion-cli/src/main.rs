@@ -17,13 +17,16 @@
 
 use std::collections::HashMap;
 use std::env;
+use std::num::NonZeroUsize;
 use std::path::Path;
 use std::process::ExitCode;
 use std::sync::{Arc, LazyLock};
 
 use datafusion::error::{DataFusionError, Result};
 use datafusion::execution::context::SessionConfig;
-use datafusion::execution::memory_pool::{FairSpillPool, GreedyMemoryPool, MemoryPool};
+use datafusion::execution::memory_pool::{
+    FairSpillPool, GreedyMemoryPool, MemoryPool, TrackConsumersPool,
+};
 use datafusion::execution::runtime_env::RuntimeEnvBuilder;
 use datafusion::execution::DiskManager;
 use datafusion::prelude::SessionContext;
@@ -168,10 +171,18 @@ async fn main_inner() -> Result<()> {
     // set memory pool size
     if let Some(memory_limit) = args.memory_limit {
         // set memory pool type
+        const NUM_TRACKED_CONSUMERS: usize = 5;
         let pool: Arc<dyn MemoryPool> = match args.mem_pool_type {
-            PoolType::Fair => Arc::new(FairSpillPool::new(memory_limit)),
-            PoolType::Greedy => Arc::new(GreedyMemoryPool::new(memory_limit)),
+            PoolType::Fair => Arc::new(TrackConsumersPool::new(
+                FairSpillPool::new(memory_limit),
+                NonZeroUsize::new(NUM_TRACKED_CONSUMERS).unwrap(),
+            )),
+            PoolType::Greedy => Arc::new(TrackConsumersPool::new(
+                GreedyMemoryPool::new(memory_limit),
+                NonZeroUsize::new(NUM_TRACKED_CONSUMERS).unwrap(),
+            )),
         };
+
         rt_builder = rt_builder.with_memory_pool(pool)
     }
 

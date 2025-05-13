@@ -103,6 +103,34 @@ fn cli_explain_environment_overrides() {
     assert_cmd_snapshot!(cmd);
 }
 
+/// Ensure memory pool configuration is working
+#[test]
+fn cli_memory_pool() {
+    let mut cmd = cli();
+    cmd.args([
+        "--command",
+        "SELECT t1.v1
+         FROM generate_series(1, 10000000) AS t1(v1) 
+         order by v1",
+        "-q",
+        "--mem-pool-type",
+        "fair",
+        "-m",
+        "1M",
+    ]);
+
+    assert_cmd_snapshot!(cmd, @r"
+    success: false
+    exit_code: 1
+    ----- stdout -----
+    Error: Not enough memory to continue external sort. Consider increasing the memory limit, or decreasing sort_spill_reservation_bytes
+    caused by
+    Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as: DataFusion-Cli#0(can spill: false) consumed 0 bytes, ExternalSorter[0]#1(can spill: true) consumed 0 bytes, ExternalSorterMerge[0]#2(can spill: false) consumed 0 bytes. Error: Failed to allocate additional 10485760 bytes for ExternalSorterMerge[0] with 0 bytes already allocated for this reservation - 1048576 bytes remain available for the total pool
+
+    ----- stderr -----
+    ");
+}
+
 #[rstest]
 #[case("csv")]
 #[case("tsv")]
