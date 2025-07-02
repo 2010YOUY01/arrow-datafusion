@@ -271,7 +271,8 @@ impl SortTest {
         let exec = MemorySourceConfig::try_new_exec(&input, schema, None).unwrap();
         let sort = Arc::new(SortExec::new(sort_ordering, exec));
 
-        let session_config = SessionConfig::new().with_repartition_file_scans(false)
+        let session_config = SessionConfig::new()
+            .with_repartition_file_scans(false)
             .with_sort_max_spill_merge_degree(self.sort_max_spill_merge_degree);
         let session_ctx = if let Some(pool_size) = self.pool_size {
             // Make sure there is enough space for the initial spill
@@ -282,7 +283,7 @@ impl SortTest {
                     .execution
                     .sort_spill_reservation_bytes,
             );
-            println!("Pool size: {}", pool_size);
+            println!("Pool size: {pool_size}");
 
             let inner_pool = FairSpillPool::new(pool_size);
             let pool = Arc::new(TrackConsumersPool::new(

@@ -48,7 +48,9 @@ use arrow::array::{Array, RecordBatch, RecordBatchOptions, StringViewArray};
 use arrow::compute::{concat_batches, lexsort_to_indices, take_arrays};
 use arrow::datatypes::SchemaRef;
 use datafusion_common::config::SpillCompression;
-use datafusion_common::{config_err, internal_datafusion_err, internal_err, DataFusionError, Result};
+use datafusion_common::{
+    config_err, internal_datafusion_err, internal_err, DataFusionError, Result,
+};
 use datafusion_execution::disk_manager::RefCountedTempFile;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::runtime_env::RuntimeEnv;
@@ -541,13 +543,11 @@ impl ExternalSorter {
             })
             .collect::<Result<Vec<_>>>()?;
 
-        let sort_exprs: LexOrdering = self.expr.iter().cloned().collect();
-
         // ==== Doing sort-preserving merge on input partially sorted streams ====
         let spm_stream = StreamingMergeBuilder::new()
             .with_streams(partially_sorted_streams)
             .with_schema(Arc::clone(&self.schema))
-            .with_expressions(sort_exprs.as_ref())
+            .with_expressions(&self.expr)
             .with_metrics(self.metrics.baseline.clone())
             .with_batch_size(self.batch_size)
             .with_fetch(None)
@@ -624,12 +624,10 @@ impl ExternalSorter {
             return Ok(partially_sorted_streams.into_iter().next().unwrap());
         }
 
-        let sort_exprs: LexOrdering = self.expr.iter().cloned().collect();
-
         let spm_stream = StreamingMergeBuilder::new()
             .with_streams(partially_sorted_streams)
             .with_schema(Arc::clone(&self.schema))
-            .with_expressions(sort_exprs.as_ref())
+            .with_expressions(&self.expr)
             .with_metrics(self.metrics.baseline.clone())
             .with_batch_size(self.batch_size)
             .with_fetch(None)
