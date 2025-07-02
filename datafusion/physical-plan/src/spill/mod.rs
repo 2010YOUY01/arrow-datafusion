@@ -21,7 +21,7 @@ pub(crate) mod in_progress_spill_file;
 pub(crate) mod spill_manager;
 
 use std::fs::File;
-use std::io::BufReader;
+use std::io::{BufReader, Cursor};
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::ptr::NonNull;
@@ -58,7 +58,8 @@ struct SpillReaderStream {
 
 /// When we poll for the next batch, we will get back both the batch and the reader,
 /// so we can call `next` again.
-type NextRecordBatchResult = Result<(StreamReader<BufReader<File>>, Option<RecordBatch>)>;
+type NextRecordBatchResult =
+    Result<(StreamReader<Cursor<memmap2::Mmap>>, Option<RecordBatch>)>;
 
 enum SpillReaderStreamState {
     /// Initial state: the stream was not initialized yet
@@ -69,7 +70,7 @@ enum SpillReaderStreamState {
     ReadInProgress(SpawnedTask<NextRecordBatchResult>),
 
     /// A read has finished and we wait for being polled again in order to start reading the next batch.
-    Waiting(StreamReader<BufReader<File>>),
+    Waiting(StreamReader<Cursor<memmap2::Mmap>>),
 
     /// The stream has finished, successfully or not.
     Done,
@@ -97,12 +98,18 @@ impl SpillReaderStream {
                 };
 
                 let task = SpawnedTask::spawn_blocking(move || {
-                    let file = BufReader::new(File::open(spill_file.path())?);
+                    let file = File::open(spill_file.path())?;
+                    let mmap = unsafe {
+                        memmap2::Mmap::map(&file).expect("failed to mmap file")
+                    };
+                    let cursor = Cursor::new(mmap);
+
+                    // let file = BufReader::new(File::open(spill_file.path())?);
                     // SAFETY: DataFusion's spill writer strictly follows Arrow IPC specifications
                     // with validated schemas and buffers. Skip redundant validation during read
                     // to speedup read operation. This is safe for DataFusion as input guaranteed to be correct when written.
                     let mut reader = unsafe {
-                        StreamReader::try_new(file, None)?.with_skip_validation(true)
+                        StreamReader::try_new(cursor, None)?.with_skip_validation(true)
                     };
 
                     let next_batch = reader.next().transpose()?;

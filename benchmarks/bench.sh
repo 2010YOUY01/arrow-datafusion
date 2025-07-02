@@ -115,6 +115,7 @@ imdb:                   Join Order Benchmark (JOB) using the IMDB dataset conver
 cancellation:           How long cancelling a query takes
 parquet:                Benchmark of parquet reader's filtering speed
 sort:                   Benchmark of sorting speed
+nlj:                    Nested Loop Join (NLJ) benchmark with various join conditions and sizes
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Supported Configuration (Environment Variables)
@@ -300,6 +301,7 @@ main() {
                     run_cancellation
                     run_parquet
                     run_sort
+                    run_nlj
                     run_clickbench_1
                     run_clickbench_partitioned
                     run_clickbench_extended
@@ -338,6 +340,9 @@ main() {
                     ;;
                 sort)
                     run_sort
+                    ;;
+                nlj)
+                    run_nlj
                     ;;
                 clickbench_1)
                     run_clickbench_1
@@ -534,6 +539,14 @@ run_sort() {
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running sort benchmark..."
     debug_run $CARGO_COMMAND --bin parquet -- sort --path "${DATA_DIR}" --scale-factor 1.0 --iterations 5 -o "${RESULTS_FILE}"
+}
+
+# Runs the nested loop join benchmark
+run_nlj() {
+    RESULTS_FILE="${RESULTS_DIR}/nlj.json"
+    echo "RESULTS_FILE: ${RESULTS_FILE}"
+    echo "Running nested loop join benchmark..."
+    debug_run $CARGO_COMMAND --bin dfbench -- nlj --iterations 5 -o "${RESULTS_FILE}" ${QUERY_ARG}
 }
 
 

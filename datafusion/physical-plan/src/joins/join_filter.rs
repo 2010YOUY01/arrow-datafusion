@@ -23,6 +23,23 @@ use std::sync::Arc;
 
 /// Filter applied before join output. Fields are crate-public to allow
 /// downstream implementations to experiment with custom joins.
+///
+/// Illustration:
+/// ```text
+/// left_plan: [v1, v2]
+/// right_plan: [v3]
+/// join_filter: v1 + v3 = 10
+///
+/// The join executor requires a minimal intermediate batch to evaluate the join
+/// predicate (batch{[v1, v3]}), and it uses this struct to represent it.
+/// The struct fields are:
+/// - `expression`: v1 + v3 = 10
+/// - `column_indices` is the index into the full join schema in join executor:
+///   [ColumnIndex { index: 0, side: Left }, ColumnIndex { index: 0, side: Right }]
+/// - `schema` is the schema of the intermediate batch (that is constructed
+///   with projection to build a minimal batch to evaluate the join predicate:
+///   [v1, v3]
+/// ```
 #[derive(Debug, Clone)]
 pub struct JoinFilter {
     /// Filter expression

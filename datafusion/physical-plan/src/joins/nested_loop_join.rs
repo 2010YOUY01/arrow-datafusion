@@ -30,6 +30,7 @@ use super::utils::{
 };
 use crate::common::can_project;
 use crate::execution_plan::{boundedness_from_children, EmissionType};
+use crate::joins::nlj::NLJStream;
 use crate::joins::utils::{
     adjust_indices_by_join_type, apply_join_filter_to_indices, build_batch_from_indices,
     build_join_schema, check_join_is_valid, estimate_join_statistics,
@@ -64,8 +65,10 @@ use datafusion_physical_expr::equivalence::{
 use futures::{ready, Stream, StreamExt, TryStreamExt};
 use parking_lot::Mutex;
 
+static USE_NLJ_V2: bool = true;
+
 /// Left (build-side) data
-struct JoinLeftData {
+pub(crate) struct JoinLeftData {
     /// Build-side data collected to single batch
     batch: RecordBatch,
     /// Shared bitmap builder for visited left indices
@@ -80,7 +83,7 @@ struct JoinLeftData {
 }
 
 impl JoinLeftData {
-    fn new(
+    pub(crate) fn new(
         batch: RecordBatch,
         bitmap: SharedBitmapBuilder,
         probe_threads_counter: AtomicUsize,
@@ -94,17 +97,17 @@ impl JoinLeftData {
         }
     }
 
-    fn batch(&self) -> &RecordBatch {
+    pub(crate) fn batch(&self) -> &RecordBatch {
         &self.batch
     }
 
-    fn bitmap(&self) -> &SharedBitmapBuilder {
+    pub(crate) fn bitmap(&self) -> &SharedBitmapBuilder {
         &self.bitmap
     }
 
     /// Decrements counter of running threads, and returns `true`
     /// if caller is the last running thread
-    fn report_probe_completed(&self) -> bool {
+    pub(crate) fn report_probe_completed(&self) -> bool {
         self.probe_threads_counter.fetch_sub(1, Ordering::Relaxed) == 1
     }
 }
@@ -161,6 +164,8 @@ pub struct NestedLoopJoinExec {
     /// How the join is performed
     pub(crate) join_type: JoinType,
     /// The schema once the join is applied
+    /// Full join schema. If left plan is [v1, v2], right plan is [v3], then this
+    /// join_schema is [v1, v2, v3]
     join_schema: SchemaRef,
     /// Future that consumes left input and buffers it in memory
     ///
@@ -170,8 +175,11 @@ pub struct NestedLoopJoinExec {
     /// the hash table creation.
     inner_table: OnceAsync<JoinLeftData>,
     /// Information of index and left / right placement of columns
+    /// This is used for `join_schema` to find whether a column is from left input
+    /// or right input.
     column_indices: Vec<ColumnIndex>,
     /// Projection to apply to the output of the join
+    /// The output schema is applying this projection to the [`Self::join_schema`]
     projection: Option<Vec<usize>>,
 
     /// Execution metrics
@@ -530,36 +538,49 @@ impl ExecutionPlan for NestedLoopJoinExec {
             None => self.column_indices.clone(),
         };
 
-        if enforce_batch_size_in_joins {
-            Ok(Box::pin(NestedLoopJoinStream {
-                schema: self.schema(),
-                filter: self.filter.clone(),
-                join_type: self.join_type,
+        if USE_NLJ_V2 {
+            Ok(Box::pin(NLJStream::new(
+                self.schema(),
+                self.filter.clone(),
+                self.join_type,
                 outer_table,
                 inner_table,
-                column_indices: column_indices_after_projection,
+                column_indices_after_projection,
                 join_metrics,
-                indices_cache,
-                right_side_ordered,
-                state: NestedLoopJoinStreamState::WaitBuildSide,
-                batch_transformer: BatchSplitter::new(batch_size),
-                left_data: None,
-            }))
+                batch_size,
+            )))
         } else {
-            Ok(Box::pin(NestedLoopJoinStream {
-                schema: self.schema(),
-                filter: self.filter.clone(),
-                join_type: self.join_type,
-                outer_table,
-                inner_table,
-                column_indices: column_indices_after_projection,
-                join_metrics,
-                indices_cache,
-                right_side_ordered,
-                state: NestedLoopJoinStreamState::WaitBuildSide,
-                batch_transformer: NoopBatchTransformer::new(),
-                left_data: None,
-            }))
+            if enforce_batch_size_in_joins {
+                Ok(Box::pin(NestedLoopJoinStream {
+                    schema: self.schema(),
+                    filter: self.filter.clone(),
+                    join_type: self.join_type,
+                    outer_table,
+                    inner_table,
+                    column_indices: column_indices_after_projection,
+                    join_metrics,
+                    indices_cache,
+                    right_side_ordered,
+                    state: NestedLoopJoinStreamState::WaitBuildSide,
+                    batch_transformer: BatchSplitter::new(batch_size),
+                    left_data: None,
+                }))
+            } else {
+                Ok(Box::pin(NestedLoopJoinStream {
+                    schema: self.schema(),
+                    filter: self.filter.clone(),
+                    join_type: self.join_type,
+                    outer_table,
+                    inner_table,
+                    column_indices: column_indices_after_projection,
+                    join_metrics,
+                    indices_cache,
+                    right_side_ordered,
+                    state: NestedLoopJoinStreamState::WaitBuildSide,
+                    batch_transformer: NoopBatchTransformer::new(),
+                    left_data: None,
+                }))
+            }
         }
     }
 

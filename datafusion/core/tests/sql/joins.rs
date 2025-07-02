@@ -15,11 +15,130 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion::assert_batches_eq;
+use arrow::datatypes::{DataType, Field, Schema};
+use datafusion::catalog::TableFunctionImpl;
 use datafusion::datasource::stream::{FileStreamProvider, StreamConfig, StreamTable};
 use datafusion::test_util::register_unbounded_file_with_ordering;
+use datafusion::{assert_batches_eq, assert_batches_sorted_eq};
+use datafusion_common::JoinSide;
+use datafusion_common::ScalarValue;
+use datafusion_execution::TaskContext;
+use datafusion_expr::Operator;
+use datafusion_functions_table::generate_series::GenerateSeriesFunc;
+use datafusion_physical_expr::expressions::{BinaryExpr, Column, Literal};
+use datafusion_physical_plan::joins::utils::{ColumnIndex, JoinFilter};
+use datafusion_physical_plan::joins::NestedLoopJoinExec;
+use futures::StreamExt;
 
 use super::*;
+
+fn create_sum_mod_filter() -> JoinFilter {
+    let column_indices = vec![
+        ColumnIndex {
+            index: 0,
+            side: JoinSide::Left,
+        },
+        ColumnIndex {
+            index: 0,
+            side: JoinSide::Right,
+        },
+    ];
+
+    let intermediate_schema = Schema::new(vec![
+        Field::new("value", DataType::Int64, false),
+        Field::new("value", DataType::Int64, false),
+    ]);
+
+    // Create (left.value + right.value) % 10 == 0
+    let left_col = Arc::new(Column::new("value", 0));
+    let right_col = Arc::new(Column::new("value", 1));
+    let sum_expr = Arc::new(BinaryExpr::new(left_col, Operator::Plus, right_col));
+    let mod_expr = Arc::new(BinaryExpr::new(
+        sum_expr,
+        Operator::Modulo,
+        Arc::new(Literal::new(ScalarValue::Int64(Some(10)))),
+    ));
+    let filter_expression = Arc::new(BinaryExpr::new(
+        mod_expr,
+        Operator::Eq,
+        Arc::new(Literal::new(ScalarValue::Int64(Some(0)))),
+    ));
+
+    JoinFilter::new(
+        filter_expression,
+        column_indices,
+        Arc::new(intermediate_schema),
+    )
+}
+
+async fn construct_plan_for_generate_series(
+    start: i64,
+    end: i64,
+    step: i64,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    let generate_series_func = GenerateSeriesFunc {};
+    let args = vec![
+        Expr::Literal(ScalarValue::Int64(Some(start)), None),
+        Expr::Literal(ScalarValue::Int64(Some(end)), None),
+        Expr::Literal(ScalarValue::Int64(Some(step)), None),
+    ];
+    let table_provider = generate_series_func.call(&args)?;
+
+    // Create a session state for the scan
+    let ctx = SessionContext::new();
+    let session_state = ctx.state();
+
+    // Scan the table to get the physical execution plan
+    let physical_plan = table_provider.scan(&session_state, None, &[], None).await?;
+
+    Ok(physical_plan)
+}
+
+#[tokio::test]
+async fn test_nlj() -> Result<()> {
+    let left_plan = construct_plan_for_generate_series(1, 10, 1).await?;
+    let right_plan = construct_plan_for_generate_series(1, 10, 1).await?;
+
+    let filter = create_sum_mod_filter();
+    let join_plan = NestedLoopJoinExec::try_new(
+        left_plan,
+        right_plan,
+        Some(filter),
+        &JoinType::Inner,
+        // Some(vec![0]),
+        None,
+    )?;
+
+    let result = join_plan.execute(0, Arc::new(TaskContext::default()))?;
+
+    let batches: Vec<_> = result.collect().await;
+    let batches: Result<Vec<_>> = batches.into_iter().collect();
+    let batches = batches?;
+
+    // Assert the expected results - pairs where (left.value + right.value) % 10 == 0
+    // Use sorted comparison since the order of results may vary between implementations
+    assert_batches_sorted_eq!(
+        [
+            "+-------+-------+",
+            "| value | value |",
+            "+-------+-------+",
+            "| 1     | 9     |",
+            "| 2     | 8     |",
+            "| 3     | 7     |",
+            "| 4     | 6     |",
+            "| 5     | 5     |",
+            "| 6     | 4     |",
+            "| 7     | 3     |",
+            "| 8     | 2     |",
+            "| 9     | 1     |",
+            "| 10    | 10    |",
+            "+-------+-------+",
+        ],
+        &batches
+    );
+
+    Ok(())
+}
 
 #[tokio::test]
 async fn join_change_in_planner() -> Result<()> {

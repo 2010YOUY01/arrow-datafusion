@@ -894,6 +894,10 @@ pub(crate) fn build_batch_from_indices(
         )?);
     }
 
+    if build_indices.is_empty() {
+        return Ok(RecordBatch::new_empty(Arc::new(schema.clone())));
+    }
+
     // build the columns of the new [RecordBatch]:
     // 1. pick whether the column is from the left or right
     // 2. based on the pick, `take` items from the different RecordBatches
