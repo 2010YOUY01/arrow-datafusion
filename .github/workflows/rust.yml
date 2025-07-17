@@ -333,7 +333,7 @@ jobs:
         env:
           RUST_BACKTRACE: 1
         run: |
-        cargo nextest run --workspace \
+          cargo nextest run --workspace \
           --exclude datafusion-examples \
           --exclude ffi_module_loader \
           --exclude ffi_example_table_provider \
