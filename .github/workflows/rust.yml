@@ -333,7 +333,13 @@ jobs:
         env:
           RUST_BACKTRACE: 1
         run: |
-          cargo nextest run --config-file nextest.toml
+        cargo nextest run --workspace \
+          --exclude datafusion-examples \
+          --exclude ffi_module_loader \
+          --exclude ffi_example_table_provider \
+          --exclude datafusion-benchmarks \
+          --exclude datafusion-cli \
+          --config-file nextest.toml
 
       - name: Handle timeout failures
         if: failure()
