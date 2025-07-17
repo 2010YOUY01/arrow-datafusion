@@ -298,25 +298,26 @@ jobs:
       - name: Verify Working Directory Clean
         run: git diff --exit-code
 
-  # Run `cargo nextest run` and ensure each test runs within 60 seconds
   linux-test-fast:
-    name: cargo nextest run (fast tests)
+    name: cargo test (amd64)
     needs: linux-build-lib
     runs-on: ubuntu-latest
     container:
-      image: rust:1.78-slim-bullseye   # ← adjust to your image
-    timeout-minutes: 30
-
+      image: amd64/rust
     steps:
       - uses: actions/checkout@v4
         with:
           submodules: true
           fetch-depth: 1
-
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
+      - name: Rust Dependency Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+         save-if: ${{ github.ref_name == 'main' }}
+         shared-key: "amd-ci"
 
       - name: Install cargo-nextest
         run: cargo install cargo-nextest --version 0.9.69
