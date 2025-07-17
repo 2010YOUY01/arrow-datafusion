@@ -299,7 +299,7 @@ jobs:
         run: git diff --exit-code
 
   linux-test-fast:
-    name: cargo test (amd64)
+    name: cargo nextest run (fast tests)
     needs: linux-build-lib
     runs-on: ubuntu-latest
     container:
@@ -319,14 +319,8 @@ jobs:
          save-if: ${{ github.ref_name == 'main' }}
          shared-key: "amd-ci"
 
-      - name: Install cargo-nextest
-        run: cargo install cargo-nextest --version 0.9.69
-
-      - name: Rust Dependency Cache
-        uses: Swatinem/rust-cache@v2
-        with:
-          save-if: ${{ github.ref_name == 'main' }}
-          shared-key: amd-ci-fast-test
+      - name: Install cargo‑nextest
+        run: cargo install cargo-nextest --version '^0.9' --locked
 
       - name: Create nextest config
         run: |
