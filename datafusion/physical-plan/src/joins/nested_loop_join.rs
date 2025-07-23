@@ -539,6 +539,7 @@ impl ExecutionPlan for NestedLoopJoinExec {
         };
 
         if USE_NLJ_V2 {
+            println!("Using NLJ v2");
             Ok(Box::pin(NLJStream::new(
                 self.schema(),
                 self.filter.clone(),

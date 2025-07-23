@@ -1230,6 +1230,20 @@ logical_plan
 statement ok
 set datafusion.optimizer.repartition_joins = false;
 
+statement ok
+set datafusion.explain.logical_plan_only = false;
+
+query TT
+explain
+SELECT t1_id, t1_name
+FROM lsaj_t1
+WHERE NOT EXISTS (SELECT 1 FROM lsaj_t2 WHERE t1_id = t2_id)
+ORDER BY t1_id
+----
+
+statement ok
+set datafusion.explain.logical_plan_only = true;
+
 query IT
 SELECT t1_id, t1_name
 FROM lsaj_t1
