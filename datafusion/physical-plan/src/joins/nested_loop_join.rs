@@ -34,7 +34,7 @@ use crate::joins::utils::{
     build_join_schema, check_join_is_valid, estimate_join_statistics,
     BuildProbeJoinMetrics, ColumnIndex, JoinFilter, OnceAsync, OnceFut,
 };
-use crate::joins::SharedBitmapBuilder;
+use crate::joins::{join_filter, SharedBitmapBuilder};
 use crate::metrics::{Count, ExecutionPlanMetricsSet, MetricsSet};
 use crate::projection::{
     try_embed_projection, try_pushdown_through_join, EmbeddedProjection, JoinData,
@@ -53,9 +53,10 @@ use arrow::compute::{concat_batches, filter, filter_record_batch, not, BatchCoal
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::cast::as_boolean_array;
+use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{
     internal_datafusion_err, internal_err, project_schema, unwrap_or_internal_err,
-    DataFusionError, JoinSide, Result, ScalarValue, Statistics,
+    DataFusionError, HashMap, JoinSide, Result, ScalarValue, Statistics,
 };
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
@@ -64,6 +65,7 @@ use datafusion_physical_expr::equivalence::{
     join_equivalence_properties, ProjectionMapping,
 };
 
+use datafusion_physical_expr::expressions::{Column, Literal};
 use futures::{Stream, StreamExt, TryStreamExt};
 use log::debug;
 use parking_lot::Mutex;
@@ -1538,7 +1540,15 @@ fn apply_filter_to_row_join_batch(
         .ok_or_else(|| internal_datafusion_err!("This function assume input batch is not empty, so the intermediate batch can't be empty too"))?
     };
 
-    let filter_result = filter
+    // TMP: try optimizing the filter
+    let optimized_filter = filter_rewrite(left_batch, l_index, filter)?;
+
+    // println!(
+    //     "Filter before optimization:\n{:#?}\nFilter after optimization:\n{:#?}",
+    //     old_filter, optimized_filter
+    // );
+
+    let filter_result = optimized_filter
         .expression()
         .evaluate(&intermediate_batch)?
         .into_array(intermediate_batch.num_rows())?;
@@ -1859,6 +1869,52 @@ fn build_unmatched_batch(
         }
         _ => internal_err!("If batch is at right side, this function must be handling Full/Right/RightSemi/RightAnti/RightMark joins"),
     }
+}
+
+/// TODO: more doc
+fn filter_rewrite(
+    left_batch: &RecordBatch,
+    left_idx: usize,
+    filter: &JoinFilter,
+) -> Result<JoinFilter> {
+    let original_filter = Arc::clone(filter.expression());
+
+    // col_idx (in the intermediate batch) -> scalar value
+    let left_scalars: HashMap<usize, ScalarValue> = filter
+        .column_indices
+        .iter()
+        .enumerate()
+        .filter(|(_, col_idx)| col_idx.side == JoinSide::Left)
+        .map(|(idx, col_idx)| {
+            let scalar = ScalarValue::try_from_array(
+                left_batch.column(col_idx.index).as_ref(),
+                left_idx,
+            )?;
+            Ok((idx, scalar))
+        })
+        .collect::<Result<HashMap<usize, ScalarValue>>>()?;
+
+    let optimized_filter = original_filter.transform_down(|e| {
+        if let Some(column) = e.as_any().downcast_ref::<Column>() {
+            let col_idx_in_intermeidate = column.index();
+            // If it's left column, the result should be `Some` and it can be
+            // optimized from Column -> ScalarValue
+            let maybe_scalar_value = left_scalars.get(&col_idx_in_intermeidate);
+            if let Some(scalar) = maybe_scalar_value {
+                return Ok(Transformed::yes(Arc::new(Literal::new(scalar.clone()))));
+            }
+        }
+
+        Ok(Transformed::yes(e))
+    });
+
+    let optimized_filter = JoinFilter::new(
+        optimized_filter?.data,
+        Vec::new(),
+        Arc::clone(&filter.schema),
+    );
+
+    Ok(optimized_filter)
 }
 
 #[cfg(test)]
