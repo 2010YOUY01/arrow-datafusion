@@ -34,7 +34,7 @@ use crate::joins::utils::{
     build_join_schema, check_join_is_valid, estimate_join_statistics,
     BuildProbeJoinMetrics, ColumnIndex, JoinFilter, OnceAsync, OnceFut,
 };
-use crate::joins::{join_filter, SharedBitmapBuilder};
+use crate::joins::SharedBitmapBuilder;
 use crate::metrics::{Count, ExecutionPlanMetricsSet, MetricsSet};
 use crate::projection::{
     try_embed_projection, try_pushdown_through_join, EmbeddedProjection, JoinData,
@@ -1528,16 +1528,45 @@ fn apply_filter_to_row_join_batch(
             right_batch.num_rows(),
         )?
     } else {
-        build_row_join_batch(
-            &filter.schema,
-            left_batch,
-            l_index,
-            right_batch,
-            None,
-            &filter.column_indices,
-            JoinSide::Left,
-        )?
-        .ok_or_else(|| internal_datafusion_err!("This function assume input batch is not empty, so the intermediate batch can't be empty too"))?
+        // Since we're only doing (1-left-row JOIN right-batch), we can do the
+        // optimization:
+        // 1. For intermediate batch, only keep columns from the right side
+        // 2. Rewrite join filter, to transform left column reference to scalar,
+        //    and update right column reference to updated indices
+        let schema_indices_in_right: Vec<usize> = filter
+            .column_indices
+            .iter()
+            .enumerate()
+            .filter(|(_, col_idx)| col_idx.side == JoinSide::Right)
+            .map(|(i, _)| i)
+            .collect();
+
+        let right_only_intermediate_schema =
+            project_schema(filter.schema(), Some(&schema_indices_in_right))?;
+
+        // build_row_join_batch(
+        //     &filter.schema,
+        //     left_batch,
+        //     l_index,
+        //     right_batch,
+        //     None,
+        //     &filter.column_indices,
+        //     JoinSide::Left,
+        // )?
+        // .ok_or_else(|| internal_datafusion_err!("This function assume input batch is not empty, so the intermediate batch can't be empty too"))?
+
+        let mut columns: Vec<Arc<dyn Array>> =
+            Vec::with_capacity(right_only_intermediate_schema.fields().len());
+
+        for column_index in filter.column_indices() {
+            if column_index.side == JoinSide::Right {
+                let arr = right_batch.column(column_index.index);
+
+                columns.push(Arc::clone(arr));
+            };
+        }
+
+        RecordBatch::try_new(right_only_intermediate_schema, columns)?
     };
 
     // TMP: try optimizing the filter
@@ -1879,33 +1908,45 @@ fn filter_rewrite(
 ) -> Result<JoinFilter> {
     let original_filter = Arc::clone(filter.expression());
 
-    // col_idx (in the intermediate batch) -> scalar value
-    let left_scalars: HashMap<usize, ScalarValue> = filter
-        .column_indices
-        .iter()
-        .enumerate()
-        .filter(|(_, col_idx)| col_idx.side == JoinSide::Left)
-        .map(|(idx, col_idx)| {
+    // Map from filter column enumerated index to new intermediate batch index for right columns
+    let mut right_column_index: HashMap<usize, usize> = HashMap::new();
+    let mut new_right_index = 0;
+
+    // col_idx (filter enumerated index) -> scalar value for left columns
+    let mut left_scalars: HashMap<usize, ScalarValue> = HashMap::new();
+
+    for (filter_enum_idx, col_idx) in filter.column_indices().iter().enumerate() {
+        if col_idx.side == JoinSide::Left {
             let scalar = ScalarValue::try_from_array(
                 left_batch.column(col_idx.index).as_ref(),
                 left_idx,
             )?;
-            Ok((idx, scalar))
-        })
-        .collect::<Result<HashMap<usize, ScalarValue>>>()?;
+            left_scalars.insert(filter_enum_idx, scalar);
+        } else if col_idx.side == JoinSide::Right {
+            right_column_index.insert(filter_enum_idx, new_right_index);
+            new_right_index += 1;
+        } else {
+            unreachable!("Only possible to be either left or right side");
+        }
+    }
 
     let optimized_filter = original_filter.transform_down(|e| {
         if let Some(column) = e.as_any().downcast_ref::<Column>() {
-            let col_idx_in_intermeidate = column.index();
-            // If it's left column, the result should be `Some` and it can be
-            // optimized from Column -> ScalarValue
-            let maybe_scalar_value = left_scalars.get(&col_idx_in_intermeidate);
-            if let Some(scalar) = maybe_scalar_value {
+            let col_idx_in_filter = column.index();
+
+            // If it's left column, optimize from Column -> ScalarValue
+            if let Some(scalar) = left_scalars.get(&col_idx_in_filter) {
                 return Ok(Transformed::yes(Arc::new(Literal::new(scalar.clone()))));
+            }
+
+            // If it's right column, update the index to point to intermediate batch
+            if let Some(new_index) = right_column_index.get(&col_idx_in_filter) {
+                let new_col = Column::new(column.name(), *new_index);
+                return Ok(Transformed::yes(Arc::new(new_col)));
             }
         }
 
-        Ok(Transformed::yes(e))
+        Ok(Transformed::no(e))
     });
 
     let optimized_filter = JoinFilter::new(
