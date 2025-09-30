@@ -23,11 +23,14 @@ use std::mem::size_of_val;
 
 use crate::array_agg::ArrayAgg;
 
-use arrow::array::ArrayRef;
+use arrow::array::{as_string_array, ArrayRef};
 use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::cast::{as_generic_string_array, as_string_view_array};
-use datafusion_common::{internal_err, not_impl_err, Result, ScalarValue};
+use datafusion_common::{
+    internal_datafusion_err, internal_err, not_impl_err, Result, ScalarValue,
+};
 use datafusion_expr::function::AccumulatorArgs;
+use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
     Accumulator, AggregateUDFImpl, Documentation, Signature, TypeSignature, Volatility,
 };
@@ -138,7 +141,12 @@ impl AggregateUDFImpl for StringAgg {
     }
 
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
-        self.array_agg.state_fields(args)
+        Ok(vec![Field::new(
+            format_state_name(args.name, "string_agg"),
+            DataType::LargeUtf8,
+            true,
+        )
+        .into()])
     }
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
@@ -161,21 +169,7 @@ impl AggregateUDFImpl for StringAgg {
             );
         };
 
-        let array_agg_acc = self.array_agg.accumulator(AccumulatorArgs {
-            return_field: Field::new(
-                "f",
-                DataType::new_list(acc_args.return_field.data_type().clone(), true),
-                true,
-            )
-            .into(),
-            exprs: &filter_index(acc_args.exprs, 1),
-            ..acc_args
-        })?;
-
-        Ok(Box::new(StringAggAccumulator::new(
-            array_agg_acc,
-            delimiter,
-        )))
+        Ok(Box::new(StringAggAccumulator::new(delimiter)))
     }
 
     fn reverse_expr(&self) -> datafusion_expr::ReversedUDAF {
@@ -189,84 +183,123 @@ impl AggregateUDFImpl for StringAgg {
 
 #[derive(Debug)]
 pub(crate) struct StringAggAccumulator {
-    array_agg_acc: Box<dyn Accumulator>,
     delimiter: String,
+    // Updating during `update_batch()`. e.g. "foo,bar"
+    in_progress_string: String,
+    has_value: bool,
 }
 
 impl StringAggAccumulator {
-    pub fn new(array_agg_acc: Box<dyn Accumulator>, delimiter: &str) -> Self {
+    pub fn new(delimiter: &str) -> Self {
         Self {
-            array_agg_acc,
             delimiter: delimiter.to_string(),
+            in_progress_string: "".to_string(),
+            has_value: false,
+        }
+    }
+
+    #[inline]
+    fn append_strings<'a, I>(&mut self, iter: I)
+    where
+        I: Iterator<Item = Option<&'a str>>,
+    {
+        for value in iter {
+            if let Some(value) = value {
+                if self.has_value {
+                    self.in_progress_string.push_str(&self.delimiter);
+                }
+
+                self.in_progress_string.push_str(value);
+                self.has_value = true;
+            }
         }
     }
 }
 
 impl Accumulator for StringAggAccumulator {
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        self.array_agg_acc.update_batch(&filter_index(values, 1))
+        let string_arr = values.get(0).ok_or_else(|| {
+            internal_datafusion_err!(
+                "Planner should ensure its first arg is Utf8/Utf8View"
+            )
+        })?;
+
+        match string_arr.data_type() {
+            DataType::Utf8 => {
+                let array = as_string_array(string_arr);
+                self.append_strings(array.iter());
+            }
+            DataType::LargeUtf8 => {
+                let array = as_generic_string_array::<i64>(string_arr)?;
+                self.append_strings(array.iter());
+            }
+            DataType::Utf8View => {
+                let array = as_string_view_array(string_arr)?;
+                self.append_strings(array.iter());
+            }
+            other => {
+                return internal_err!(
+                    "Planner should ensure string_agg first argument is Utf8-like, found {other}"
+                );
+            }
+        }
+
+        Ok(())
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
-        let scalar = self.array_agg_acc.evaluate()?;
-
-        let ScalarValue::List(list) = scalar else {
-            return internal_err!("Expected a DataType::List while evaluating underlying ArrayAggAccumulator, but got {}", scalar.data_type());
+        let result = if self.has_value {
+            ScalarValue::LargeUtf8(Some(std::mem::take(&mut self.in_progress_string)))
+        } else {
+            ScalarValue::LargeUtf8(None)
         };
 
-        let string_arr: Vec<_> = match list.value_type() {
-            DataType::LargeUtf8 => as_generic_string_array::<i64>(list.values())?
-                .iter()
-                .flatten()
-                .collect(),
-            DataType::Utf8 => as_generic_string_array::<i32>(list.values())?
-                .iter()
-                .flatten()
-                .collect(),
-            DataType::Utf8View => as_string_view_array(list.values())?
-                .iter()
-                .flatten()
-                .collect(),
-            _ => {
-                return internal_err!(
-                    "Expected elements to of type Utf8 or LargeUtf8, but got {}",
-                    list.value_type()
-                )
-            }
-        };
-
-        if string_arr.is_empty() {
-            return Ok(ScalarValue::LargeUtf8(None));
-        }
-
-        Ok(ScalarValue::LargeUtf8(Some(
-            string_arr.join(&self.delimiter),
-        )))
+        self.has_value = false;
+        Ok(result)
     }
 
     fn size(&self) -> usize {
-        size_of_val(self) - size_of_val(&self.array_agg_acc)
-            + self.array_agg_acc.size()
-            + self.delimiter.capacity()
+        size_of_val(self) + self.delimiter.capacity() + self.in_progress_string.capacity()
     }
 
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
-        self.array_agg_acc.state()
+        let result = if self.has_value {
+            ScalarValue::LargeUtf8(Some(std::mem::take(&mut self.in_progress_string)))
+        } else {
+            ScalarValue::LargeUtf8(None)
+        };
+        self.has_value = false;
+
+        Ok(vec![result])
     }
 
     fn merge_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        self.array_agg_acc.merge_batch(values)
-    }
-}
+        let Some(string_arr) = values.get(0) else {
+            return Ok(());
+        };
 
-fn filter_index<T: Clone>(values: &[T], index: usize) -> Vec<T> {
-    values
-        .iter()
-        .enumerate()
-        .filter(|(i, _)| *i != index)
-        .map(|(_, v)| v)
-        .cloned()
-        .collect::<Vec<_>>()
+        match string_arr.data_type() {
+            DataType::Utf8 => {
+                let array = as_string_array(string_arr);
+                self.append_strings(array.iter());
+            }
+            DataType::LargeUtf8 => {
+                let array = as_generic_string_array::<i64>(string_arr)?;
+                self.append_strings(array.iter());
+            }
+            DataType::Utf8View => {
+                let array = as_string_view_array(string_arr)?;
+                self.append_strings(array.iter());
+            }
+            other => {
+                return internal_err!(
+                    "Planner should ensure string_agg merge input is Utf8-like, found {other}"
+                );
+            }
+        }
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]
