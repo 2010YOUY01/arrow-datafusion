@@ -28,6 +28,7 @@ use crate::aggregates::{
     ordered_partial_stream::OrderedPartialAggregateStream,
     partial_reduce_stream::PartialReduceHashAggregateStream,
     row_hash::GroupedHashAggregateStream,
+    single_stream::SingleHashAggregateStream,
     topk_stream::GroupedTopKAggregateStream,
 };
 use crate::execution_plan::{CardinalityEffect, EmissionType};
@@ -84,6 +85,7 @@ mod ordered_final_stream;
 mod ordered_partial_stream;
 mod partial_reduce_stream;
 mod row_hash;
+mod single_stream;
 mod skip_partial;
 mod topk;
 mod topk_stream;
@@ -539,6 +541,9 @@ enum StreamType {
     /// Final stage of the hash aggregation
     /// Input output scheme: partial state -> final result
     FinalHash(FinalHashAggregateStream),
+    /// Single stage of the hash aggregation
+    /// Input output scheme: initial input -> final result
+    SingleHash(SingleHashAggregateStream),
     /// Partial stage of aggregation for ordered input.
     OrderedPartialAggregate(OrderedPartialAggregateStream),
     /// Final stage of aggregation for ordered input.
@@ -547,8 +552,8 @@ enum StreamType {
     ///
     /// Note this is being incrementally migrated to dedicated streams like
     /// [`StreamType::PartialHash`], [`StreamType::FinalHash`],
-    /// [`StreamType::OrderedPartialAggregate`], and
-    /// [`StreamType::OrderedFinalAggregate`]
+    /// [`StreamType::SingleHash`], [`StreamType::OrderedPartialAggregate`],
+    /// and [`StreamType::OrderedFinalAggregate`]
     ///
     /// See issue for details: <https://github.com/apache/datafusion/issues/22710>
     GroupedHash(GroupedHashAggregateStream),
@@ -567,6 +572,7 @@ impl From<StreamType> for SendableRecordBatchStream {
             StreamType::PartialHash(stream) => Box::pin(stream),
             StreamType::PartialReduceHash(stream) => Box::pin(stream),
             StreamType::FinalHash(stream) => Box::pin(stream),
+            StreamType::SingleHash(stream) => Box::pin(stream),
             StreamType::OrderedPartialAggregate(stream) => Box::pin(stream),
             StreamType::OrderedFinalAggregate(stream) => Box::pin(stream),
             StreamType::GroupedHash(stream) => Box::pin(stream),
@@ -1071,6 +1077,12 @@ impl AggregateExec {
                     self, context, partition,
                 )?));
             }
+
+            if self.should_use_single_hash_stream(context) {
+                return Ok(StreamType::SingleHash(SingleHashAggregateStream::new(
+                    self, context, partition,
+                )?));
+            }
         }
 
         // Execution paths that have not been migrated use the fallback implementation
@@ -1128,6 +1140,21 @@ impl AggregateExec {
 
         self.mode == AggregateMode::PartialReduce
             && self.limit_options.is_none()
+            && self.input_order_mode == InputOrderMode::Linear
+            && !self.group_by.is_true_no_grouping()
+            && self.group_by.is_single()
+    }
+
+    fn should_use_single_hash_stream(&self, context: &TaskContext) -> bool {
+        // TODO: implement memory-limited path and remove this limitation
+        if matches!(context.memory_pool().memory_limit(), MemoryLimit::Finite(_)) {
+            return false;
+        }
+
+        matches!(
+            self.mode,
+            AggregateMode::Single | AggregateMode::SinglePartitioned
+        ) && self.limit_options_supported_by_hash_stream()
             && self.input_order_mode == InputOrderMode::Linear
             && !self.group_by.is_true_no_grouping()
             && self.group_by.is_single()
@@ -3502,6 +3529,76 @@ mod tests {
 | 2 |
 +---+
 ");
+
+        Ok(())
+    }
+
+    fn single_test_aggregate(mode: AggregateMode) -> Result<AggregateExec> {
+        let (schema, batches) = some_data();
+        let input = TestMemoryExec::try_new_exec(&[batches], Arc::clone(&schema), None)?;
+        let group_by =
+            PhysicalGroupBy::new_single(vec![(col("a", &schema)?, "a".to_string())]);
+        let aggregates: Vec<Arc<AggregateFunctionExpr>> = vec![Arc::new(
+            AggregateExprBuilder::new(count_udaf(), vec![col("b", &schema)?])
+                .schema(Arc::clone(&schema))
+                .alias("COUNT(b)")
+                .build()?,
+        )];
+
+        AggregateExec::try_new(
+            mode,
+            group_by,
+            aggregates,
+            vec![None],
+            input,
+            Arc::clone(&schema),
+        )
+    }
+
+    /// For single-stage aggregation, ensures `SingleHashAggregateStream` is
+    /// used for both single modes when enabled by migration config.
+    #[tokio::test]
+    async fn single_aggregate_planning() -> Result<()> {
+        let task_ctx = new_migrated_hash_ctx(2);
+
+        for mode in [AggregateMode::Single, AggregateMode::SinglePartitioned] {
+            let aggregate = single_test_aggregate(mode)?;
+            let stream = aggregate.execute_typed(0, &task_ctx)?;
+            assert!(matches!(stream, StreamType::SingleHash(_)));
+
+            let stream: SendableRecordBatchStream = stream.into();
+            let output = collect(stream).await?;
+            assert_eq!(
+                output.iter().map(RecordBatch::num_rows).collect::<Vec<_>>(),
+                vec![2, 1]
+            );
+            assert_eq!(
+                batches_to_sort_string(&output),
+                "\
++---+----------+
+| a | COUNT(b) |
++---+----------+
+| 2 | 2        |
+| 3 | 3        |
+| 4 | 3        |
++---+----------+"
+            );
+        }
+
+        Ok(())
+    }
+
+    /// Spilling behavior is not implemented for single-stage hash stream yet,
+    /// so fall back to the existing `GroupedHashAggregateStream`.
+    #[tokio::test]
+    async fn single_aggregate_with_memory_limit_planning() -> Result<()> {
+        let task_ctx = new_finite_memory_migrated_hash_ctx(2, 1)?;
+
+        for mode in [AggregateMode::Single, AggregateMode::SinglePartitioned] {
+            let aggregate = single_test_aggregate(mode)?;
+            let stream = aggregate.execute_typed(0, &task_ctx)?;
+            assert!(matches!(stream, StreamType::GroupedHash(_)));
+        }
 
         Ok(())
     }
