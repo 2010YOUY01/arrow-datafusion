@@ -1100,7 +1100,6 @@ impl AggregateExec {
         self.mode == AggregateMode::Partial
             && self.input_order_mode == InputOrderMode::Linear
             && !self.group_by.is_true_no_grouping()
-            && self.group_by.is_single()
             && self.limit_options_supported_by_hash_stream()
     }
 
@@ -1157,7 +1156,6 @@ impl AggregateExec {
         ) && self.limit_options.is_none()
             && self.input_order_mode == InputOrderMode::Linear
             && !self.group_by.is_true_no_grouping()
-            && self.group_by.is_single()
     }
 
     fn should_use_ordered_final_aggregate_stream(&self, context: &TaskContext) -> bool {

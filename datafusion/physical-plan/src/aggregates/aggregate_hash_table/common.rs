@@ -15,10 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::collections::HashMap;
 use std::marker::PhantomData;
 use std::sync::Arc;
 
-use arrow::array::{ArrayRef, AsArray, new_null_array};
+use arrow::array::{ArrayRef, AsArray, BooleanArray, new_null_array};
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{Result, internal_err};
@@ -32,6 +33,7 @@ use crate::aggregates::grouped_hash_stream::create_group_accumulator;
 use crate::aggregates::order::GroupOrdering;
 use crate::aggregates::{
     AggregateExec, PhysicalGroupBy, aggregate_expressions, evaluate_group_by,
+    group_id_array, max_duplicate_ordinal,
 };
 
 /// Marker for raw rows -> partial state aggregation.
@@ -304,6 +306,66 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
 
         state.batch_group_indices = Vec::new();
         self.state = AggregateHashTableState::Outputting(state);
+    }
+
+    /// Creates the required empty grouping-set rows for raw-input aggregation.
+    ///
+    /// For example, `GROUP BY GROUPING SETS (())` must produce a grand-total
+    /// group even when the input is empty. The synthetic row is filtered out
+    /// before accumulator update so aggregates retain their zero-row values
+    /// (`0` for `COUNT`, `NULL` for `SUM`, and so on).
+    pub(super) fn init_empty_grouping_sets(&mut self) -> Result<()> {
+        let state = self.state.building_mut();
+        if !state.group_by.has_grouping_set() || !state.group_values.is_empty() {
+            return Ok(());
+        }
+
+        let max_ordinal = max_duplicate_ordinal(state.group_by.groups());
+        let mut ordinals: HashMap<&[bool], usize> = HashMap::new();
+        let group_schema = state.group_by.group_schema(&self.input_schema)?;
+        let n_expr = state.group_by.expr().len();
+        let mut any_interned = false;
+
+        for group in state.group_by.groups() {
+            let ordinal = {
+                let entry = ordinals.entry(group.as_slice()).or_insert(0);
+                let ordinal = *entry;
+                *entry += 1;
+                ordinal
+            };
+
+            if !group.iter().all(|&is_null| is_null) {
+                continue;
+            }
+
+            let mut cols: Vec<ArrayRef> = group_schema
+                .fields()
+                .iter()
+                .take(n_expr)
+                .map(|field| new_null_array(field.data_type(), 1))
+                .collect();
+            cols.push(group_id_array(group, ordinal, max_ordinal, 1)?);
+
+            state
+                .group_values
+                .intern(&cols, &mut state.batch_group_indices)?;
+            any_interned = true;
+        }
+
+        if any_interned {
+            let total_groups = state.group_values.len();
+            let false_filter = BooleanArray::from(vec![false]);
+            for acc in state.accumulators.iter_mut() {
+                let null_args = acc.null_arguments(&self.input_schema)?;
+                let values = EvaluatedAccumulatorArgs {
+                    arguments: null_args,
+                    filter: Some(Arc::new(false_filter.clone())),
+                };
+                acc.update_batch(&values, &[0], total_groups)?;
+            }
+        }
+
+        Ok(())
     }
 }
 
