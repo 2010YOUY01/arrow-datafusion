@@ -841,7 +841,7 @@ config_namespace! {
         /// buffers the entire partition). The buffer respects the global memory
         /// pool limit. Setting this to a large value is safe — actual memory
         /// usage is bounded by partition size and global memory limits.
-        pub sort_pushdown_buffer_capacity: usize, default = 1024 * 1024 * 1024
+        pub sort_pushdown_buffer_capacity: ConfigNonZeroUsize, default = non_zero_usize_default(1024 * 1024 * 1024)
 
         /// Maximum size in bytes for individual spill files before rotating to a new file.
         ///

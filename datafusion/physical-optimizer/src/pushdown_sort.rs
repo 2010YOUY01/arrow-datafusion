@@ -91,7 +91,7 @@ impl PhysicalOptimizerRule for PushdownSort {
             return Ok(plan);
         }
 
-        let buffer_capacity = config.execution.sort_pushdown_buffer_capacity;
+        let buffer_capacity = config.execution.sort_pushdown_buffer_capacity.get();
 
         // Use transform_down to find and optimize all SortExec nodes (including nested ones)
         // Also handles SPM → SortExec pattern to insert BufferExec when sort is eliminated
