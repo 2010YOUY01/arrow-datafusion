@@ -49,6 +49,23 @@ SELECT cast_to_type(42, 0::INTEGER);
 ----
 42
 
+# Exact same Arrow type simplifies directly to the source expression.
+query IT
+SELECT
+  cast_to_type(arrow_cast(42, 'Int32'), 0::INTEGER),
+  arrow_typeof(cast_to_type(arrow_cast(42, 'Int32'), 0::INTEGER));
+----
+42 Int32
+
+query error DataFusion error:
+SELECT cast_to_type()
+
+query error DataFusion error:
+SELECT cast_to_type(1)
+
+query error DataFusion error:
+SELECT cast_to_type(1, 2, 3)
+
 # Second argument is a typed NULL double
 query R
 SELECT cast_to_type('3.14', NULL::DOUBLE);
