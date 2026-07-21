@@ -178,6 +178,66 @@ SELECT regexp_like(E'a\nb', '^b');
 ----
 false
 
+# Scalar patterns on each string array representation avoid operator rewriting
+# because the flags have no equivalent regex operator.
+query BBB
+SELECT
+  regexp_like(arrow_cast(value, 'Utf8'), '^a', 'm'),
+  regexp_like(arrow_cast(value, 'LargeUtf8'), '^a', 'm'),
+  regexp_like(arrow_cast(value, 'Utf8View'), '^a', 'm')
+FROM (VALUES ('alpha'), ('beta'), (NULL)) AS t(value)
+----
+true true true
+false false false
+NULL NULL NULL
+
+# Null scalar patterns produce a null array for all string widths.
+query BBB
+SELECT
+  regexp_like(arrow_cast(value, 'Utf8'), arrow_cast(NULL, 'Utf8'), 'm'),
+  regexp_like(arrow_cast(value, 'LargeUtf8'), arrow_cast(NULL, 'LargeUtf8'), 'm'),
+  regexp_like(arrow_cast(value, 'Utf8View'), arrow_cast(NULL, 'Utf8View'), 'm')
+FROM (VALUES ('alpha'), (NULL)) AS t(value)
+----
+NULL NULL NULL
+NULL NULL NULL
+
+# Exercise the complete value/pattern string-width matrix and both non-Utf8
+# flags conversions. Dynamic flags keep these calls in regexp_like.
+query BBBBBBBBB
+SELECT
+  regexp_like(arrow_cast(value, 'Utf8'), arrow_cast(pattern, 'Utf8'), arrow_cast(flags, 'LargeUtf8')),
+  regexp_like(arrow_cast(value, 'Utf8'), arrow_cast(pattern, 'Utf8View'), arrow_cast(flags, 'Utf8View')),
+  regexp_like(arrow_cast(value, 'Utf8'), arrow_cast(pattern, 'LargeUtf8'), flags),
+  regexp_like(arrow_cast(value, 'Utf8View'), arrow_cast(pattern, 'Utf8'), flags),
+  regexp_like(arrow_cast(value, 'Utf8View'), arrow_cast(pattern, 'Utf8View'), flags),
+  regexp_like(arrow_cast(value, 'Utf8View'), arrow_cast(pattern, 'LargeUtf8'), flags),
+  regexp_like(arrow_cast(value, 'LargeUtf8'), arrow_cast(pattern, 'Utf8'), flags),
+  regexp_like(arrow_cast(value, 'LargeUtf8'), arrow_cast(pattern, 'Utf8View'), flags),
+  regexp_like(arrow_cast(value, 'LargeUtf8'), arrow_cast(pattern, 'LargeUtf8'), flags)
+FROM (VALUES
+  ('Alpha', '^a', 'i'),
+  ('beta', '^a', 'm'),
+  (NULL, '^a', 'i'),
+  ('alpha', NULL, 'i'),
+  ('alpha', '^a', NULL)
+) AS t(value, pattern, flags)
+----
+true true true true true true true true true
+false false false false false false false false false
+NULL NULL NULL NULL NULL NULL NULL NULL NULL
+NULL NULL NULL NULL NULL NULL NULL NULL NULL
+true true true true true true true true true
+
+query error DataFusion error:
+SELECT regexp_like()
+
+query error DataFusion error:
+SELECT regexp_like('a')
+
+query error DataFusion error:
+SELECT regexp_like('a', 'a', '', 'extra')
+
 statement error
 Error during planning: Cannot infer common argument type for regex operation List(Field { name: "item", data_type: Int64, nullable: true, metadata: {} }) ~ List(Field { name: "item", data_type: Int64, nullable: true, metadata: {} })
 select [1,2] ~ [3];
