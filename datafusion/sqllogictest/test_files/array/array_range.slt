@@ -17,6 +17,21 @@
 
 include ./init_data.slt.part
 
+# generate_series stops cleanly when the next step would overflow
+query ?
+select generate_series(9223372036854775806, 9223372036854775807, 2);
+----
+[9223372036854775806]
+
+query error DataFusion error:
+select generate_series();
+
+query error DataFusion error:
+select generate_series(1, 2, 3, 4);
+
+query error DataFusion error:
+select generate_series(true);
+
 # Ensure can coerce from other valid types
 query ???????????
 select range(5),
