@@ -120,6 +120,16 @@ SELECT list_first([1, 2, 3, 4], x -> x > 2);
 ----
 3
 
+# Predicate result must be boolean
+query error predicate must return boolean array, got Int64
+SELECT array_first([1, 2, 3], x -> x + 1);
+
+query error DataFusion error:
+SELECT array_first([1, 2, 3]);
+
+query error DataFusion error:
+SELECT array_first(1, x -> x > 0);
+
 statement ok
 drop table t;
 
