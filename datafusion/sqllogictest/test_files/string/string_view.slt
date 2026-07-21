@@ -1100,6 +1100,59 @@ R
 (empty)
 NULL
 
+# LargeUtf8 array with scalar arguments exercises the optimized search paths.
+query TTTTTT
+SELECT
+  substr_index(arrow_cast(column1, 'LargeUtf8'), '.', 2),
+  substr_index(arrow_cast(column1, 'LargeUtf8'), '.', -2),
+  substr_index(arrow_cast(column1, 'LargeUtf8'), '::', 2),
+  substr_index(arrow_cast(column1, 'LargeUtf8'), '::', -2),
+  substr_index(arrow_cast(column1, 'LargeUtf8'), '', 1),
+  substr_index(arrow_cast(column1, 'LargeUtf8'), '.', 0)
+FROM (VALUES ('a.b.c.d'), ('aa::bb::cc::dd'), (NULL)) AS t(column1)
+----
+a.b c.d a.b.c.d a.b.c.d (empty) (empty)
+aa::bb::cc::dd aa::bb::cc::dd aa::bb cc::dd (empty) (empty)
+NULL NULL NULL NULL NULL NULL
+
+# Array delimiter and count use the general LargeUtf8 dispatch.
+query T
+SELECT substr_index(
+  arrow_cast(value, 'LargeUtf8'),
+  arrow_cast(delimiter, 'LargeUtf8'),
+  count
+)
+FROM (VALUES
+  ('one--two--three', '--', 2),
+  ('one--two--three', '--', -1),
+  ('unchanged', '--', 4),
+  ('anything', NULL, 1),
+  (NULL, '--', 1)
+) AS t(value, delimiter, count)
+----
+one--two
+three
+unchanged
+NULL
+NULL
+
+# Null scalar delimiter/count and the compatibility alias.
+query TTT
+SELECT
+  substr_index(arrow_cast(value, 'LargeUtf8'), arrow_cast(NULL, 'LargeUtf8'), 1),
+  substr_index(arrow_cast(value, 'LargeUtf8'), '.', NULL),
+  substring_index(arrow_cast(value, 'LargeUtf8'), '.', 1)
+FROM (VALUES ('alpha.beta'), (NULL)) AS t(value)
+----
+NULL NULL alpha
+NULL NULL NULL
+
+query error DataFusion error:
+SELECT substr_index()
+
+query error DataFusion error:
+SELECT substr_index('a.b', '.', 1, 2)
+
 
 ## Ensure no casts on columns for STARTS_WITH
 query TT
