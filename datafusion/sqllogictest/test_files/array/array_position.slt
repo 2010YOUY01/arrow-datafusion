@@ -301,6 +301,21 @@ select array_position(arrow_cast(['a', 'b', 'c', 'b'], 'FixedSizeList(4, Utf8)')
 
 ## array_positions (aliases: `list_positions`)
 
+# Fixed-size array no-match and argument validation edges
+query ?
+SELECT array_positions(arrow_cast([1, 2, 3], 'FixedSizeList(3, Int64)'), 9);
+----
+[]
+
+query error DataFusion error:
+SELECT array_positions([1, 2, 3]);
+
+query error DataFusion error:
+SELECT array_positions([1, 2, 3], 2, 1);
+
+query error DataFusion error:
+SELECT array_positions(1, 1);
+
 # array_positions with empty array
 query ?
 select array_positions(arrow_cast(make_array(), 'List(Int64)'), 1);
