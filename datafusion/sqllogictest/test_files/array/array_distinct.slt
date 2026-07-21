@@ -118,6 +118,21 @@ from array_distinct_table_2D_fixed;
 
 ## array_compact (aliases: `list_compact`)
 
+# Untyped NULL follows the NullArray path
+query ?
+select array_compact(NULL);
+----
+NULL
+
+query error DataFusion error:
+select array_compact();
+
+query error DataFusion error:
+select array_compact([1], [2]);
+
+query error DataFusion error:
+select array_compact(1);
+
 # basic: remove nulls from integer array
 query ?
 select array_compact([1, NULL, 2, NULL, 3]);
