@@ -594,6 +594,16 @@ SELECT abs(c1), abs(c2), abs(c3), abs(c4) FROM test_nullable_decimal
 99999999.99 9999999999999999999999999999.9999999999 99999999999999999999999999999999999999.99 999999999999999999999999999999999999999999999999999999999999999999.9999999999
 NULL NULL NULL NULL
 
+# abs: Arrow Decimal32 and Decimal64 kernels
+query TTTT
+SELECT
+  arrow_typeof(abs(arrow_cast(-12.34, 'Decimal32(7,2)'))),
+  arrow_cast(abs(arrow_cast(-12.34, 'Decimal32(7,2)')), 'Utf8'),
+  arrow_typeof(abs(arrow_cast(-123456789, 'Decimal64(18,0)'))),
+  arrow_cast(abs(arrow_cast(-123456789, 'Decimal64(18,0)')), 'Utf8');
+----
+Decimal32(7, 2) 12.34 Decimal64(18, 0) 123456789
+
 statement ok
 drop table test_nullable_decimal
 
