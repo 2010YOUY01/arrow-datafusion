@@ -362,6 +362,56 @@ SELECT regexp_count(str, pattern, start, flags) from empty_table;
 0
 0
 
+# Scalar pattern with column flags and/or start positions
+query III
+SELECT
+  regexp_count(str, 'abc', 1, flags),
+  regexp_count(str, 'abc', start, 'i'),
+  regexp_count(str, 'abc', start, flags)
+FROM (VALUES
+  ('abcABC', 1, 'i'),
+  ('abc', 2, ''),
+  (NULL, 1, 'i')
+) AS t(str, start, flags);
+----
+2 2 2
+1 0 0
+0 0 0
+
+# Column pattern and flags with a scalar start
+query I
+SELECT regexp_count(str, pattern, 1, flags)
+FROM (VALUES
+  ('abcABC', 'abc', 'i'),
+  ('abc', 'b', ''),
+  ('abc', NULL, 'i')
+) AS t(str, pattern, flags);
+----
+2
+1
+0
+
+# Null scalar patterns in the column-flags/start paths
+query III
+SELECT
+  regexp_count(str, arrow_cast(NULL, 'Utf8View'), 1, flags),
+  regexp_count(str, arrow_cast(NULL, 'Utf8View'), start, 'i'),
+  regexp_count(str, arrow_cast(NULL, 'Utf8View'), start, flags)
+FROM (VALUES ('abc', 1, 'i'), ('def', 2, '')) AS t(str, start, flags);
+----
+0 0 0
+0 0 0
+
+# Invalid argument count and type
+query error DataFusion error:
+SELECT regexp_count();
+
+query error DataFusion error:
+SELECT regexp_count('abc');
+
+query error DataFusion error:
+SELECT regexp_count('abc', 'a', 1, '', 'extra');
+
 statement ok
 drop table t_stringview;
 
