@@ -225,5 +225,73 @@ SELECT string_to_array(',a,b,', ',')
 ----
 [, a, b, ]
 
+# Scalar delimiter fast paths with null and empty input rows
+query ???
+select
+  string_to_array(arrow_cast(column1, 'Utf8'), ''),
+  string_to_array(arrow_cast(column1, 'LargeUtf8'), ''),
+  string_to_array(arrow_cast(column1, 'Utf8View'), '')
+from (values ('abc'), (''), (NULL)) as t(column1);
+----
+[abc] [abc] [abc]
+[] [] []
+NULL NULL NULL
+
+query ???
+select
+  string_to_array(arrow_cast(column1, 'Utf8'), NULL, 'é'),
+  string_to_array(arrow_cast(column1, 'LargeUtf8'), NULL, 'é'),
+  string_to_array(arrow_cast(column1, 'Utf8View'), NULL, 'é')
+from (values ('éx'), (''), (NULL)) as t(column1);
+----
+[NULL, x] [NULL, x] [NULL, x]
+[] [] []
+NULL NULL NULL
+
+# Column delimiter/null-string fallback in every string width
+query ???
+select
+  string_to_array(
+    arrow_cast(column1, 'Utf8'),
+    arrow_cast(column2, 'Utf8'),
+    arrow_cast(column3, 'Utf8')
+  ),
+  string_to_array(
+    arrow_cast(column1, 'LargeUtf8'),
+    arrow_cast(column2, 'LargeUtf8'),
+    arrow_cast(column3, 'LargeUtf8')
+  ),
+  string_to_array(
+    arrow_cast(column1, 'Utf8View'),
+    arrow_cast(column2, 'Utf8View'),
+    arrow_cast(column3, 'Utf8View')
+  )
+from (values
+  ('a,b', ',', 'b'),
+  ('abc', '', 'abc'),
+  ('éx', NULL, 'é'),
+  (NULL, ',', 'x')
+) as t(column1, column2, column3);
+----
+[a, NULL] [a, NULL] [a, NULL]
+[NULL] [NULL] [NULL]
+[NULL, x] [NULL, x] [NULL, x]
+NULL NULL NULL
+
+# Function alias and invalid argument counts
+query ?
+select string_to_list('a,b', ',');
+----
+[a, b]
+
+query error DataFusion error:
+select string_to_array();
+
+query error DataFusion error:
+select string_to_array('a');
+
+query error DataFusion error:
+select string_to_array('a', ',', 'N', 'extra');
+
 
 include ./cleanup.slt.part
