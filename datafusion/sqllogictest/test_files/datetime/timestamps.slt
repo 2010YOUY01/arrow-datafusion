@@ -3651,6 +3651,44 @@ select to_time(to_timestamp('1960-06-15T08:45:30+00:00'));
 ----
 08:45:30
 
+# String arrays in every supported width, including nulls
+query DDD
+select
+  to_time(arrow_cast(column1, 'Utf8')),
+  to_time(arrow_cast(column1, 'LargeUtf8')),
+  to_time(arrow_cast(column1, 'Utf8View'))
+from (values ('12:30:45.123'), ('09:15'), (NULL)) as t(column1);
+----
+12:30:45.123 12:30:45.123 12:30:45.123
+09:15:00 09:15:00 09:15:00
+NULL NULL NULL
+
+# Multiple formats are tried in order and null formats are skipped
+query DDD
+select
+  to_time(arrow_cast(column1, 'Utf8'), '%H-%M-%S', arrow_cast(NULL, 'Utf8'), '%H:%M:%S'),
+  to_time(arrow_cast(column1, 'LargeUtf8'), arrow_cast('%H:%M:%S', 'LargeUtf8')),
+  to_time(arrow_cast(column1, 'Utf8View'), arrow_cast('%H:%M:%S', 'Utf8View'))
+from (values ('12:30:45'), (NULL)) as t(column1);
+----
+12:30:45 12:30:45 12:30:45
+NULL NULL NULL
+
+# Timestamp array input
+query D
+select to_time(arrow_cast(column1, 'Timestamp(Nanosecond, None)'))
+from (values ('2024-01-15 14:30:45'), (NULL)) as t(column1);
+----
+14:30:45
+NULL
+
+# Dynamic formats and unsupported input types
+query error to_time format argument 2 must be a scalar, not an array
+select to_time('12:30:45', column1) from (values ('%H:%M:%S')) as t(column1);
+
+query error Unsupported data type Int64 for function to_time
+select to_time(1);
+
 ##########
 ## to_char tests
 ##########
