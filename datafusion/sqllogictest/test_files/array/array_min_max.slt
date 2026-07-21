@@ -145,6 +145,23 @@ select array_max(arrow_cast(make_array(10, -5, 3), 'List(Int32)'));
 ----
 10
 
+# Lists at or above the kernel threshold use Arrow's max kernel.
+query I
+select array_max(range(1, 41));
+----
+40
+
+query I
+select list_max(arrow_cast(range(-40, 1), 'LargeList(Int64)'));
+----
+0
+
+query error DataFusion error:
+select array_max(1);
+
+query error DataFusion error:
+select array_max([1], [2]);
+
 ## array_min
 
 query I
