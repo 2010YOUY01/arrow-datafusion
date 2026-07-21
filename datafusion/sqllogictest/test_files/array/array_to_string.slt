@@ -373,6 +373,56 @@ select array_to_string(make_array(arrow_cast(1000, 'Duration(Millisecond)'), arr
 ----
 PT1S,PT2S
 
+# Direct leaf formatting for the remaining primitive widths
+query TTTTTT
+select
+  array_to_string(arrow_cast([true, false, NULL], 'List(Boolean)'), ',', 'N'),
+  array_to_string(arrow_cast([1.5, -2.25, NULL], 'List(Float32)'), ',', 'N'),
+  array_to_string(arrow_cast([1, -2, NULL], 'List(Int8)'), ',', 'N'),
+  array_to_string(arrow_cast([1, -2, NULL], 'List(Int16)'), ',', 'N'),
+  array_to_string(arrow_cast([1, -2, NULL], 'List(Int32)'), ',', 'N'),
+  array_to_string(arrow_cast(['a', 'b', NULL], 'List(LargeUtf8)'), ',', 'N');
+----
+true,false,N 1.5,-2.25,N 1,-2,N 1,-2,N 1,-2,N a,b,N
+
+query TTTT
+select
+  array_to_string(arrow_cast([1, 2, NULL], 'List(UInt8)'), ',', 'N'),
+  array_to_string(arrow_cast([1, 2, NULL], 'List(UInt16)'), ',', 'N'),
+  array_to_string(arrow_cast([1, 2, NULL], 'List(UInt32)'), ',', 'N'),
+  array_to_string(arrow_cast([1, 2, NULL], 'List(UInt64)'), ',', 'N');
+----
+1,2,N 1,2,N 1,2,N 1,2,N
+
+# Nested large lists and null-only leaves
+query TT
+select
+  array_to_string(arrow_cast([[1, 2], [3, NULL]], 'List(LargeList(Int64))'), ',', 'N'),
+  array_to_string(arrow_cast([NULL, NULL], 'List(Null)'), ',', 'N');
+----
+1,2,3,N (empty)
+
+# Utf8View and LargeUtf8 null replacement arguments
+query TT
+select
+  array_to_string([1, NULL, 3], ',', arrow_cast('missing', 'Utf8View')),
+  array_to_string([1, NULL, 3], ',', arrow_cast('missing', 'LargeUtf8'));
+----
+1,missing,3 1,missing,3
+
+# Invalid argument counts and first argument type
+query error DataFusion error:
+select array_to_string();
+
+query error DataFusion error:
+select array_to_string([1]);
+
+query error DataFusion error:
+select array_to_string([1], ',', 'N', 'extra');
+
+query error DataFusion error:
+select array_to_string(1, ',');
+
 
 
 include ./cleanup.slt.part
