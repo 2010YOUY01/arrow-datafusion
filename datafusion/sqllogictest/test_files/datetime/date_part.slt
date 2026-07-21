@@ -1368,6 +1368,66 @@ physical_plan
 01)FilterExec: c@0 >= 2024-01-01 AND c@0 < 2025-01-01
 02)--DataSourceExec: partitions=1, partition_sizes=[1]
 
+# Epoch extraction from timestamp units not otherwise exercised
+query RRRR
+select
+  date_part('epoch', arrow_cast('1970-01-01 00:00:02', 'Timestamp(Second, None)')),
+  date_part('epoch', arrow_cast('1970-01-01 00:00:02.002', 'Timestamp(Millisecond, None)')),
+  date_part('epoch', arrow_cast('1970-01-01 00:00:02.002003', 'Timestamp(Microsecond, None)')),
+  date_part('epoch', arrow_cast('1970-01-02', 'Date64'));
+----
+2 2.002 2.002003 86400
+
+# Epoch extraction from duration arrays in every subsecond unit
+query RRR
+select
+  date_part('epoch', arrow_cast(column1, 'Duration(Millisecond)')),
+  date_part('epoch', arrow_cast(column2, 'Duration(Microsecond)')),
+  date_part('epoch', arrow_cast(column3, 'Duration(Nanosecond)'))
+from (values (2002, 2002000, 2002000000), (NULL, NULL, NULL)) as t(column1, column2, column3);
+----
+2.002 2.002 2.002
+NULL NULL NULL
+
+# Null subsecond values use the nullable conversion path
+query II
+select
+  date_part('millisecond', arrow_cast(column1, 'Timestamp(Nanosecond, None)')),
+  date_part('microsecond', arrow_cast(column1, 'Timestamp(Nanosecond, None)'))
+from (values ('2020-09-08 12:00:12.123456789'), (NULL)) as t(column1);
+----
+12123 12123456
+NULL NULL
+
+# Date inputs have no subsecond component
+query IIII
+select
+  date_part('millisecond', arrow_cast('2024-01-01', 'Date32')),
+  date_part('microsecond', arrow_cast('2024-01-01', 'Date32')),
+  date_part('nanosecond', arrow_cast('2024-01-01', 'Date64')),
+  datepart('year', arrow_cast('2024-01-01', 'Date64'));
+----
+0 0 0 2024
+
+# Invalid argument count, dynamic/empty part, and unsupported source type
+query error DataFusion error:
+select date_part();
+
+query error DataFusion error:
+select date_part('year');
+
+query error DataFusion error:
+select date_part('year', current_date(), 'extra');
+
+query error date_part requires non-empty constant string
+select date_part('', current_date());
+
+query error date_part requires non-empty constant string
+select date_part(column1, current_date()) from (values ('year')) as t(column1);
+
+query error DataFusion error:
+select date_part('year', 1);
+
 query TT
 explain select c from t1 where extract (year from c) <> 2024
 ----
