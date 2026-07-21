@@ -19,6 +19,15 @@ include ./init_data.slt.part
 
 ## array_concat (aliases: `array_cat`, `list_concat`, `list_cat`)
 
+# All-untyped NULL arguments preserve the Null return type
+query ?T
+select array_concat(NULL, NULL), arrow_typeof(array_concat(NULL, NULL));
+----
+NULL Null
+
+query error DataFusion error:
+select array_concat();
+
 # test with empty array
 query ?
 select array_concat([]);
