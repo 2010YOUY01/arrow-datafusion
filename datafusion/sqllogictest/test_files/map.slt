@@ -1199,3 +1199,23 @@ SELECT * FROM map_null_insert;
 
 statement ok
 DROP TABLE map_null_insert;
+
+# Exercise map key validation across narrow integer and date key types
+query IIIIIIII
+SELECT
+  cardinality(map(arrow_cast([1, 2], 'List(Int8)'), ['a', 'b'])),
+  cardinality(map(arrow_cast([1, 2], 'List(Int16)'), ['a', 'b'])),
+  cardinality(map(arrow_cast([1, 2], 'List(UInt8)'), ['a', 'b'])),
+  cardinality(map(arrow_cast([1, 2], 'List(UInt16)'), ['a', 'b'])),
+  cardinality(map(arrow_cast([1, 2], 'List(UInt32)'), ['a', 'b'])),
+  cardinality(map(arrow_cast([1, 2], 'List(UInt64)'), ['a', 'b'])),
+  cardinality(map([DATE '2020-01-01', DATE '2020-01-02'], ['a', 'b'])),
+  cardinality(map(arrow_cast([DATE '2020-01-01', DATE '2020-01-02'], 'List(Date64)'), ['a', 'b']));
+----
+2 2 2 2 2 2 2 2
+
+query error map key cannot be null
+SELECT map(arrow_cast([1, NULL], 'List(Int8)'), ['a', 'b']);
+
+query error DataFusion error:
+SELECT map([1]);
