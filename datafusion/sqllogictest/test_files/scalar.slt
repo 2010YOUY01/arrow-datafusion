@@ -1383,6 +1383,51 @@ select trunc(CAST(9007199254740993 AS DECIMAL(20,0)));
 ----
 9007199254740993
 
+# Float32 scalar precision and Float32/Float64 array precision paths.
+query R
+select trunc(arrow_cast(3.14159, 'Float32'), 3);
+----
+3.141
+
+query RR
+select
+  trunc(arrow_cast(v, 'Float32'), p),
+  trunc(arrow_cast(v, 'Float64'), p)
+from (values (3.14159, 3), (-12.3456, 2), (NULL, 1)) as t(v, p)
+----
+3.141 3.141
+-12.34 -12.34
+NULL NULL
+
+# Decimal32, Decimal64, and Decimal256 arrays with per-row precision.
+query RRR
+select
+  trunc(arrow_cast(v, 'Decimal32(8, 4)'), p),
+  trunc(arrow_cast(v, 'Decimal64(16, 4)'), p),
+  trunc(arrow_cast(v, 'Decimal256(40, 4)'), p)
+from (values (12.3456, 2), (-98.7654, 1), (NULL, 3)) as t(v, p)
+----
+12.34 12.34 12.34
+-98.7 -98.7 -98.7
+NULL NULL NULL
+
+# Null precision nulls the result for scalar and array values.
+query RR
+select trunc(3.14159, NULL), trunc(v, NULL)
+from (values (2.71828), (NULL)) as t(v)
+----
+NULL NULL
+NULL NULL
+
+query error DataFusion error:
+select trunc()
+
+query error DataFusion error:
+select trunc(1, 2, 3)
+
+query error DataFusion error:
+select trunc('not numeric')
+
 
 ## bitwise and
 
