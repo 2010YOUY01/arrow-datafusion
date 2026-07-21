@@ -1911,6 +1911,42 @@ SELECT arrow_typeof(translate(arrow_cast('12345', 'Utf8View'), '143', 'ax'))
 ----
 Utf8View
 
+# Dynamic mapping arrays exercise all input string widths, ASCII deletion,
+# Unicode mapping, duplicate source characters, and null propagation.
+query TTT
+SELECT
+  translate(arrow_cast(value, 'Utf8'), source_chars, target_chars),
+  translate(arrow_cast(value, 'LargeUtf8'), source_chars, target_chars),
+  translate(arrow_cast(value, 'Utf8View'), source_chars, target_chars)
+FROM (VALUES
+  ('12345', '143', 'ax'),
+  ('banana', 'an', 'XY'),
+  ('café', 'é', 'e'),
+  ('abca', 'aac', '12'),
+  ('abc', 'bc', ''),
+  (NULL, 'a', 'b'),
+  ('abc', NULL, 'b'),
+  ('abc', 'a', NULL)
+) AS t(value, source_chars, target_chars)
+----
+a2x5 a2x5 a2x5
+bXYXYX bXYXYX bXYXYX
+cafe cafe cafe
+1b1 1b1 1b1
+a a a
+NULL NULL NULL
+NULL NULL NULL
+NULL NULL NULL
+
+query error DataFusion error:
+SELECT translate()
+
+query error DataFusion error:
+SELECT translate('a', 'a')
+
+query error DataFusion error:
+SELECT translate('a', 'a', 'b', 'c')
+
 # translate operates on Unicode codepoints, not grapheme clusters.
 # chr(769) is U+0301 COMBINING ACUTE ACCENT.
 
