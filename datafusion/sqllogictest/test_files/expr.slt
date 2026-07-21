@@ -875,6 +875,38 @@ SELECT to_hex(CAST(255 AS TINYINT UNSIGNED))
 ----
 ff
 
+# Exercise each integer scalar representation accepted by to_hex.
+query TTTT
+SELECT
+  to_hex(arrow_cast(255, 'UInt32')),
+  to_hex(arrow_cast(-1, 'Int16')),
+  to_hex(arrow_cast(65535, 'UInt16')),
+  to_hex(arrow_cast(-1, 'Int8'))
+----
+ff ffffffffffffffff ffff ffffffffffffffff
+
+# Exercise each otherwise-uncovered integer array dispatch, including nulls.
+query TTTTTT
+SELECT
+  to_hex(arrow_cast(a, 'UInt64')),
+  to_hex(arrow_cast(a, 'UInt32')),
+  to_hex(arrow_cast(a, 'Int16')),
+  to_hex(arrow_cast(a, 'UInt16')),
+  to_hex(arrow_cast(a, 'Int8')),
+  to_hex(arrow_cast(a, 'UInt8'))
+FROM (VALUES (0), (10), (127), (NULL)) AS t(a)
+----
+0 0 0 0 0 0
+a a a a a a
+7f 7f 7f 7f 7f 7f
+NULL NULL NULL NULL NULL NULL
+
+query error DataFusion error:
+SELECT to_hex()
+
+query error DataFusion error:
+SELECT to_hex(1, 2)
+
 query T
 SELECT trim(' tom ')
 ----
