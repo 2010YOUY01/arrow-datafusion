@@ -118,6 +118,43 @@ SELECT regexp_replace(arrow_cast('foobar', 'Dictionary(Int32, Utf8)'), 'bar', 'x
 ----
 fooxx
 
+# Dictionary values backed by wide string and binary types
+query TT
+SELECT
+  regexp_replace(
+    arrow_cast('foobar', 'Dictionary(Int32, LargeUtf8)'),
+    arrow_cast('bar', 'LargeUtf8'),
+    arrow_cast('xx', 'LargeUtf8')
+  ),
+  arrow_typeof(regexp_replace(
+    arrow_cast('foobar', 'Dictionary(Int32, LargeUtf8)'),
+    arrow_cast('bar', 'LargeUtf8'),
+    arrow_cast('xx', 'LargeUtf8')
+  ));
+----
+fooxx Utf8View
+
+query TT
+SELECT
+  regexp_replace(
+    arrow_cast('foobar', 'Dictionary(Int32, Binary)'),
+    arrow_cast('bar', 'Binary'),
+    arrow_cast('xx', 'Binary')
+  ),
+  arrow_typeof(regexp_replace(
+    arrow_cast('foobar', 'Dictionary(Int32, Binary)'),
+    arrow_cast('bar', 'Binary'),
+    arrow_cast('xx', 'Binary')
+  ));
+----
+fooxx LargeUtf8
+
+query error DataFusion error:
+SELECT regexp_replace();
+
+query error DataFusion error:
+SELECT regexp_replace('abc', 'a');
+
 query TTT
 select
     regexp_replace(col, NULL, 'c'),
