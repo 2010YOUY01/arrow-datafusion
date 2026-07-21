@@ -805,6 +805,43 @@ FROM (VALUES ('a.b.c'), (NULL)) AS t(column1)
 b
 NULL
 
+# Dynamic delimiter and position exercise the general path for every
+# string/delimiter width combination.
+query TTTTTTTTT
+SELECT
+  split_part(arrow_cast(value, 'Utf8'), arrow_cast(delimiter, 'Utf8'), position),
+  split_part(arrow_cast(value, 'Utf8'), arrow_cast(delimiter, 'LargeUtf8'), position),
+  split_part(arrow_cast(value, 'Utf8'), arrow_cast(delimiter, 'Utf8View'), position),
+  split_part(arrow_cast(value, 'LargeUtf8'), arrow_cast(delimiter, 'Utf8'), position),
+  split_part(arrow_cast(value, 'LargeUtf8'), arrow_cast(delimiter, 'LargeUtf8'), position),
+  split_part(arrow_cast(value, 'LargeUtf8'), arrow_cast(delimiter, 'Utf8View'), position),
+  split_part(arrow_cast(value, 'Utf8View'), arrow_cast(delimiter, 'Utf8'), position),
+  split_part(arrow_cast(value, 'Utf8View'), arrow_cast(delimiter, 'LargeUtf8'), position),
+  split_part(arrow_cast(value, 'Utf8View'), arrow_cast(delimiter, 'Utf8View'), position)
+FROM (VALUES
+  ('a--b--c', '--', 2),
+  ('a--b--c', '--', -1),
+  ('abc', '', 1),
+  ('abc', '', 2),
+  (NULL, '--', 1),
+  ('abc', NULL, 1),
+  ('abc', '--', NULL)
+) AS t(value, delimiter, position)
+----
+b b b b b b b b b
+c c c c c c c c c
+abc abc abc abc abc abc abc abc abc
+(empty) (empty) (empty) (empty) (empty) (empty) (empty) (empty) (empty)
+NULL NULL NULL NULL NULL NULL NULL NULL NULL
+NULL NULL NULL NULL NULL NULL NULL NULL NULL
+NULL NULL NULL NULL NULL NULL NULL NULL NULL
+
+query error DataFusion error:
+SELECT split_part()
+
+query error DataFusion error:
+SELECT split_part('a', '.', 1, 2)
+
 query B
 SELECT starts_with('alphabet', 'alph')
 ----
