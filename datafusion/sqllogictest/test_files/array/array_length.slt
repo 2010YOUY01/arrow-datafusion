@@ -145,6 +145,32 @@ select array_length(arrow_cast(make_array(1, 2, 3, 4, 5), 'FixedSizeList(5, Int6
 ----
 5 3 3
 
+# Nested LargeList and FixedSizeList dimensions.
+query II
+select
+  array_length(arrow_cast([[1, 2], [3, 4]], 'List(LargeList(Int64))'), 2),
+  array_length(arrow_cast([[1, 2], [3, 4]], 'List(FixedSizeList(2, Int64))'), 2);
+----
+2 2
+
+query IIII
+select
+  array_length([1, 2], 0),
+  array_length([1, 2], -1),
+  array_length([1, 2], NULL),
+  array_length(arrow_cast(NULL, 'List(Int64)'), 1);
+----
+NULL NULL NULL NULL
+
+query error DataFusion error:
+select array_length()
+
+query error DataFusion error:
+select array_length([1], 1, 2)
+
+query error DataFusion error:
+select array_length(1)
+
 query III
 select array_length(arrow_cast(make_array(1, 2, 3, 4, 5), 'FixedSizeList(5, Int64)'), 1), array_length(arrow_cast(make_array(1, 2, 3), 'FixedSizeList(3, Int64)'), 1), array_length(arrow_cast(make_array([1, 2], [3, 4], [5, 6]), 'FixedSizeList(3, List(Int64))'), 1);
 ----
