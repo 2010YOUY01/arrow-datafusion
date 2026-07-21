@@ -86,6 +86,14 @@ select struct(1, 3.14, 'e');
 ----
 {c0: 1, c1: 3.14, c2: e}
 
+query ?
+select row(1, 'a', NULL);
+----
+{c0: 1, c1: a, c2: NULL}
+
+query error DataFusion error:
+select struct();
+
 # struct scalar function with named values
 query ?
 select struct(1 as "name0", 3.14 as name1, 'e', true as 'name3');
@@ -1732,4 +1740,3 @@ drop view leaf_view;
 
 statement ok
 drop table leaf_base;
-
