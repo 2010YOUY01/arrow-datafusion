@@ -3965,6 +3965,16 @@ select to_unixtime(arrow_cast('2020-09-08T12:00:00+00:00', 'LargeUtf8'));
 ----
 1599566400
 
+# Invalid argument count, format use, and input type
+query error does not support zero arguments
+select to_unixtime();
+
+query error to_unixtime function only accepts format arguments with string input, got 2 arguments
+select to_unixtime(1, '%Y');
+
+query error Unsupported data type List\(Int64\) for function to_unixtime
+select to_unixtime([1]);
+
 ##########
 ## Tests for the "AT TIME ZONE" clause
 ##########
