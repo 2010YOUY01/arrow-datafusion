@@ -273,6 +273,23 @@ select array_min(arrow_cast(make_array(10, -5, 3), 'List(Int32)'));
 ----
 -5
 
+# Lists at or above the kernel threshold use Arrow's min kernel.
+query I
+select array_min(range(1, 41));
+----
+1
+
+query I
+select array_min(arrow_cast(range(-40, 1), 'LargeList(Int64)'));
+----
+-40
+
+query error DataFusion error:
+select array_min(1);
+
+query error DataFusion error:
+select array_min([1], [2]);
+
 # array_min/array_max preserve parameterized primitive metadata
 query PPTT
 select
