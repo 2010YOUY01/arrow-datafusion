@@ -138,6 +138,34 @@ SELECT array_filter([1, 2, 3], v -> CAST(NULL AS BOOLEAN));
 ----
 []
 
+# LargeList predicate path preserves null and empty outer rows and drops null
+# predicate results.
+query ?
+SELECT array_filter(
+  arrow_cast(a, 'LargeList(Int64)'),
+  v -> CASE WHEN v = 2 THEN NULL ELSE v > 1 END
+)
+FROM (VALUES ([1, 2, 3, 4]), ([]), (NULL)) AS t(a)
+----
+[3, 4]
+[]
+NULL
+
+# LargeList scalar-false short circuit uses the LargeList empty constructor.
+query ?
+SELECT list_filter(arrow_cast(a, 'LargeList(Int64)'), v -> false)
+FROM (VALUES ([1, 2, 3]), ([]), (NULL)) AS t(a)
+----
+[]
+[]
+NULL
+
+query error DataFusion error:
+SELECT array_filter([1, 2], v -> v + 1)
+
+query error DataFusion error:
+SELECT array_filter([1], v -> true, 3)
+
 query error DataFusion error: Error during planning: The function 'array_filter' expected 2 argument\(s\) but received 0
 SELECT array_filter();
 
