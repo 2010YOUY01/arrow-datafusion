@@ -107,3 +107,32 @@ select arrow_try_cast(a, 'Utf8') from (values(1), (2), (NULL)) t(a);
 1
 2
 NULL
+
+# Same-type scalar and array expressions are simplified without a cast
+query II
+select
+  arrow_try_cast(arrow_cast(1, 'Int32'), 'Int32'),
+  arrow_try_cast(arrow_cast(a, 'Int32'), 'Int32')
+from (values (2), (NULL)) t(a);
+----
+1 2
+1 NULL
+
+# Invalid argument count and non-constant/empty target types
+query error DataFusion error:
+select arrow_try_cast();
+
+query error DataFusion error:
+select arrow_try_cast(1);
+
+query error DataFusion error:
+select arrow_try_cast(1, 'Int64', 'extra');
+
+query error arrow_try_cast requires its second argument to be a non-empty constant string
+select arrow_try_cast(1, '');
+
+query error arrow_try_cast requires its second argument to be a non-empty constant string
+select arrow_try_cast(1, arrow_cast(NULL, 'Utf8'));
+
+query error arrow_try_cast requires its second argument to be a non-empty constant string
+select arrow_try_cast(1, a) from (values ('Int64')) t(a);
