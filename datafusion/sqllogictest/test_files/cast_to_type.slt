@@ -251,6 +251,23 @@ SELECT try_cast_to_type(42, 0::INTEGER);
 ----
 42
 
+# Exact same Arrow type simplifies directly to the source expression.
+query IT
+SELECT
+  try_cast_to_type(arrow_cast(42, 'Int32'), 0::INTEGER),
+  arrow_typeof(try_cast_to_type(arrow_cast(42, 'Int32'), 0::INTEGER));
+----
+42 Int32
+
+query error DataFusion error:
+SELECT try_cast_to_type()
+
+query error DataFusion error:
+SELECT try_cast_to_type(1)
+
+query error DataFusion error:
+SELECT try_cast_to_type(1, 2, 3)
+
 # NULL first argument
 query I
 SELECT try_cast_to_type(NULL, 0::INTEGER);
