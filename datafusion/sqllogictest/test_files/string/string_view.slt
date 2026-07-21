@@ -673,6 +673,39 @@ logical_plan
 01)Projection: contains(test.column1_utf8view, Utf8("foo")) AS c1, contains(test.column1_utf8view, test.column2_utf8view) AS c2, contains(test.column1_utf8view, test.column2_large_utf8) AS c3, contains(test.column1_utf8, test.column2_utf8view) AS c4, contains(test.column1_utf8, test.column2_utf8) AS c5, contains(test.column1_utf8, test.column2_large_utf8) AS c6, contains(test.column1_large_utf8, test.column1_utf8view) AS c7, contains(test.column1_large_utf8, test.column2_utf8) AS c8, contains(test.column1_large_utf8, test.column2_large_utf8) AS c9
 02)--TableScan: test projection=[column1_utf8, column2_utf8, column1_large_utf8, column2_large_utf8, column1_utf8view, column2_utf8view]
 
+# Scalar haystack with array needles exercises the remaining Datum shape.
+query BBB
+SELECT
+  contains(arrow_cast('alphabet', 'Utf8'), arrow_cast(needle, 'Utf8View')),
+  contains(arrow_cast('alphabet', 'LargeUtf8'), arrow_cast(needle, 'Utf8')),
+  contains(arrow_cast('alphabet', 'Utf8View'), arrow_cast(needle, 'LargeUtf8'))
+FROM (VALUES ('pha'), ('xyz'), (NULL)) AS t(needle)
+----
+true true true
+false false false
+NULL NULL NULL
+
+# Scalar/scalar values for all logical string representations.
+query BBB
+SELECT
+  contains(arrow_cast('alphabet', 'Utf8'), arrow_cast('', 'Utf8')),
+  contains(arrow_cast('alphabet', 'LargeUtf8'), arrow_cast('bet', 'LargeUtf8')),
+  contains(arrow_cast('alphabet', 'Utf8View'), arrow_cast('BET', 'Utf8View'))
+----
+true true false
+
+query error DataFusion error:
+SELECT contains()
+
+query error DataFusion error:
+SELECT contains('a')
+
+query error DataFusion error:
+SELECT contains('a', 'b', 'c')
+
+query error DataFusion error:
+SELECT contains([1], [1])
+
 ## Ensure no casts for ENDS_WITH
 query TT
 EXPLAIN SELECT
