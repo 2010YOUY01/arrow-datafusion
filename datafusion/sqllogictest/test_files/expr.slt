@@ -825,6 +825,40 @@ SELECT starts_with('alphabet', NULL)
 ----
 NULL
 
+# NVL2 scalar and array choices, including null branch values and coercion.
+query T
+SELECT nvl2(tested, present_value, null_value)
+FROM (VALUES
+  ('present', 'yes', 'no'),
+  (NULL, 'yes', 'no'),
+  ('present', NULL, 'no'),
+  (NULL, 'yes', NULL)
+) AS t(tested, present_value, null_value)
+----
+yes
+no
+NULL
+NULL
+
+query RT
+SELECT nvl2(tested, 1, 2.5), arrow_typeof(nvl2(tested, 1, 2.5))
+FROM (VALUES (1), (NULL)) AS t(tested)
+----
+1 Float64
+2.5 Float64
+
+query error DataFusion error:
+SELECT nvl2()
+
+query error DataFusion error:
+SELECT nvl2(1, 2)
+
+query error DataFusion error:
+SELECT nvl2(1, 2, 3, 4)
+
+query error DataFusion error:
+SELECT nvl2(true, struct(1), [1])
+
 query T
 SELECT to_hex(2147483647)
 ----
