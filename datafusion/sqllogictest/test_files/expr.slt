@@ -477,6 +477,62 @@ SELECT concat_ws(NULL,'a',NULL,'b','c')
 ----
 NULL
 
+# Binary scalar paths and return widths. Encode the result for stable display.
+query TTT
+SELECT
+  encode(concat_ws(
+    arrow_cast(X'2d', 'Binary'),
+    arrow_cast(X'61', 'Binary'),
+    arrow_cast(NULL, 'Binary'),
+    arrow_cast(X'62', 'Binary')
+  ), 'hex'),
+  encode(concat_ws(
+    arrow_cast(X'2d', 'LargeBinary'),
+    arrow_cast(X'61', 'LargeBinary'),
+    arrow_cast(X'62', 'LargeBinary')
+  ), 'hex'),
+  encode(concat_ws(
+    arrow_cast(X'2d', 'BinaryView'),
+    arrow_cast(X'61', 'BinaryView'),
+    arrow_cast(X'62', 'BinaryView')
+  ), 'hex')
+----
+612d62 612d62 612d62
+
+# Binary array paths, including array separators and null rows.
+query TTT
+SELECT
+  encode(concat_ws(
+    arrow_cast(sep, 'Binary'),
+    arrow_cast(left_value, 'Binary'),
+    arrow_cast(right_value, 'Binary')
+  ), 'hex'),
+  encode(concat_ws(
+    arrow_cast(sep, 'LargeBinary'),
+    arrow_cast(left_value, 'LargeBinary'),
+    arrow_cast(right_value, 'LargeBinary')
+  ), 'hex'),
+  encode(concat_ws(
+    arrow_cast(sep, 'BinaryView'),
+    arrow_cast(left_value, 'BinaryView'),
+    arrow_cast(right_value, 'BinaryView')
+  ), 'hex')
+FROM (VALUES
+  (X'2d', X'61', X'62'),
+  (X'7c', X'61', NULL),
+  (NULL, X'61', X'62')
+) AS t(sep, left_value, right_value)
+----
+612d62 612d62 612d62
+61 61 61
+NULL NULL NULL
+
+query error DataFusion error:
+SELECT concat_ws()
+
+query error DataFusion error:
+SELECT concat_ws(',')
+
 query T
 SELECT concat_ws('|','a',NULL)
 ----
