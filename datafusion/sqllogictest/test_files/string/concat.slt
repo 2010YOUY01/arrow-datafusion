@@ -136,3 +136,23 @@ SELECT concat_ws(x'7c', column1, column2) from t;
 
 statement ok
 drop table t
+
+# LargeBinary columnar builder path
+statement ok
+create table concat_large_binary as
+select
+  arrow_cast(column1, 'LargeBinary') as a,
+  arrow_cast(column2, 'LargeBinary') as b
+from (values ('foo', 'bar'), ('left', NULL)) t;
+
+query ?T
+select concat(a, b), arrow_typeof(concat(a, b)) from concat_large_binary;
+----
+666f6f626172 LargeBinary
+6c656674 LargeBinary
+
+statement ok
+drop table concat_large_binary;
+
+query error DataFusion error:
+select concat(named_struct('a', 1));
