@@ -386,6 +386,26 @@ SELECT repeat(arrow_cast('foo', 'Utf8View'), 3)
 ----
 foofoofoo
 
+# Negative columnar repeat counts produce empty strings for both offset widths
+query TT
+SELECT
+  concat('[', repeat(arrow_cast(value, 'Utf8'), count), ']'),
+  concat('[', repeat(arrow_cast(value, 'LargeUtf8'), count), ']')
+FROM (VALUES ('ab', -1), ('xy', 0), ('z', 2)) t(value, count);
+----
+[] []
+[] []
+[zz] [zz]
+
+query error DataFusion error:
+SELECT repeat();
+
+query error DataFusion error:
+SELECT repeat('a');
+
+query error DataFusion error:
+SELECT repeat(named_struct('a', 1), 2);
+
 query T
 SELECT repeat(arrow_cast('foo', 'Dictionary(Int32, Utf8)'), 3)
 ----
