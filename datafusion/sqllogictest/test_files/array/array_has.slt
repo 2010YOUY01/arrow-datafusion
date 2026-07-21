@@ -455,6 +455,27 @@ select array_has_all(arrow_cast(make_array(1,2,3), 'LargeList(Int64)'), arrow_ca
 ----
 true false true false false false true true false false true false true
 
+# Columnar NULL rows exercise both general and string comparison paths
+query BB
+SELECT
+  array_has_all(nested_haystack, nested_needle),
+  array_has_all(string_haystack, string_needle)
+FROM (VALUES
+  ([[1, 2], [3, 4]], [[1, 2]], ['a', 'b'], ['a']),
+  (NULL, [[1, 2]], NULL, ['a']),
+  ([[1, 2]], NULL, ['a'], NULL)
+) t(nested_haystack, nested_needle, string_haystack, string_needle);
+----
+true true
+NULL NULL
+NULL NULL
+
+query error DataFusion error:
+SELECT array_has_all([1]);
+
+query error DataFusion error:
+SELECT array_has_all(1, 1);
+
 query BBBBBBBBBBBBB
 select array_has_all(arrow_cast(make_array(1,2,3), 'FixedSizeList(3, Int64)'), arrow_cast(make_array(1, 3), 'FixedSizeList(2, Int64)')),
        array_has_all(arrow_cast(make_array(1,2,3),'FixedSizeList(3, Int64)'), arrow_cast(make_array(1, 4), 'FixedSizeList(2, Int64)')),
