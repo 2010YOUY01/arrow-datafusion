@@ -384,6 +384,31 @@ select
 ----
 Decimal256(38, 2) 10000000000000000000000000000000000.00 Decimal256(38, 2) -9999999999999999999999999999999999.00
 
+# Float32 scalar fast path, including a typed null.
+query RR
+select ceil(arrow_cast(1.25, 'Float32')), ceil(arrow_cast(NULL, 'Float32'));
+----
+2 NULL
+
+# Decimal32, Decimal64, and Decimal256 array dispatches.
+query TTT
+select
+  arrow_cast(ceil(arrow_cast(v, 'Decimal32(8, 2)')), 'Utf8'),
+  arrow_cast(ceil(arrow_cast(v, 'Decimal64(16, 2)')), 'Utf8'),
+  arrow_cast(ceil(arrow_cast(v, 'Decimal256(40, 2)')), 'Utf8')
+from (values (1.23), (-1.23), (10.00), (NULL)) as t(v)
+----
+2.00 2.00 2.00
+-1.00 -1.00 -1.00
+10.00 10.00 10.00
+NULL NULL NULL
+
+query error DataFusion error:
+select ceil()
+
+query error DataFusion error:
+select ceil('not numeric')
+
 ## degrees
 
 # degrees scalar function
