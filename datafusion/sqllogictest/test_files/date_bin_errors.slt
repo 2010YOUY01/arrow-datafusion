@@ -17,6 +17,36 @@
 
 # Tests for DATE_BIN error handling with out-of-range values
 
+# TIME inputs preserve their Arrow time unit
+query DDDD
+SELECT
+  date_bin(INTERVAL '15 minutes', arrow_cast('12:34:56', 'Time32(Second)')),
+  date_bin(INTERVAL '15 minutes', arrow_cast('12:34:56.789', 'Time32(Millisecond)')),
+  date_bin(INTERVAL '15 minutes', arrow_cast('12:34:56.123456', 'Time64(Microsecond)')),
+  date_bin(INTERVAL '15 minutes', arrow_cast('12:34:56.123456789', 'Time64(Nanosecond)'));
+----
+12:30:00 12:30:00 12:30:00 12:30:00
+
+# Exercise the Time32 array path
+query D
+SELECT date_bin(INTERVAL '1 hour', t)
+FROM (VALUES
+  (arrow_cast('01:23:45.678', 'Time32(Millisecond)')),
+  (arrow_cast('23:59:59.999', 'Time32(Millisecond)'))
+) v(t);
+----
+01:00:00
+23:00:00
+
+query error DATE_BIN stride for TIME input must be less than 1 day
+SELECT date_bin(INTERVAL '1 month', arrow_cast('12:00:00', 'Time32(Second)'));
+
+query error DataFusion error:
+SELECT date_bin();
+
+query error DataFusion error:
+SELECT date_bin(INTERVAL '1 hour', 1);
+
 # Test case from issue #20219 - should return NULL instead of panicking
 query P
 select date_bin(interval '1637426858 months', to_timestamp_millis(1040292460), timestamp '1984-01-07 00:00:00');
