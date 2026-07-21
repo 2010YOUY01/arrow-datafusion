@@ -944,6 +944,29 @@ false
 statement ok
 drop table array_has_int_needle;
 
+# FixedSizeList haystack with a per-row needle
+statement ok
+create table array_has_fixed_needle as values
+  (arrow_cast([1, 2, 3], 'FixedSizeList(3, Int64)'), 2),
+  (arrow_cast([4, 5, 6], 'FixedSizeList(3, Int64)'), 9),
+  (arrow_cast([7, NULL, 9], 'FixedSizeList(3, Int64)'), 7);
+
+query B
+select array_has(column1, column2) from array_has_fixed_needle;
+----
+true
+false
+true
+
+statement ok
+drop table array_has_fixed_needle;
+
+query error DataFusion error:
+select array_has([1]);
+
+query error DataFusion error:
+select array_has(1, 1);
+
 statement ok
 create table array_has_str_needle (arr text[], needle text) as values
   (['a', 'bb', 'ccc'], 'bb'),                                  -- inline, found
