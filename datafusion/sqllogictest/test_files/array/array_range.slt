@@ -17,6 +17,21 @@
 
 include ./init_data.slt.part
 
+# range stops cleanly when the next step would overflow
+query ?
+select range(9223372036854775806, 9223372036854775807, 2);
+----
+[9223372036854775806]
+
+query error DataFusion error:
+select range();
+
+query error DataFusion error:
+select range(1, 2, 3, 4);
+
+query error DataFusion error:
+select range(true);
+
 # Ensure can coerce from other valid types
 query ???????????
 select range(5),
