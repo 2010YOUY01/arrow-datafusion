@@ -518,5 +518,21 @@ from table_with_metadata limit 1;
 ----
 NULL the id field
 
+# The optional key must remain a non-null Utf8 scalar at execution time.
+query error DataFusion error: Execution error: Second argument to arrow_metadata must be a string literal key
+select arrow_metadata(id, name) from table_with_metadata;
+
+query error DataFusion error: Execution error: Second argument to arrow_metadata must be a string literal key
+select arrow_metadata(id, NULL) from table_with_metadata;
+
+query error DataFusion error: Execution error: Second argument to arrow_metadata must be a string literal key
+select arrow_metadata(id, arrow_cast('metadata_key', 'Utf8View')) from table_with_metadata;
+
+query error DataFusion error:
+select arrow_metadata();
+
+query error DataFusion error:
+select arrow_metadata(id, 'a', 'b') from table_with_metadata;
+
 statement ok
 drop table table_with_metadata;
