@@ -103,6 +103,35 @@ SELECT list_any_match([1, 2, 3], x -> x > 2);
 ----
 true
 
+# LargeList rows, including empty, null, and predicate-null outcomes.
+query B
+SELECT array_any_match(arrow_cast(a, 'LargeList(Int64)'), x -> x > 2)
+FROM (VALUES
+  ([1, 3]),
+  ([1, 2]),
+  ([1, NULL]),
+  ([]),
+  (NULL)
+) AS t(a)
+----
+true
+false
+NULL
+false
+NULL
+
+query error DataFusion error:
+SELECT array_any_match([1, 2], x -> x + 1)
+
+query error DataFusion error:
+SELECT array_any_match()
+
+query error DataFusion error:
+SELECT array_any_match([1], x -> true, 1)
+
+query error DataFusion error:
+SELECT array_any_match(1, x -> true)
+
 # null arg
 query B
 SELECT array_any_match(NULL, x -> x > 2);
