@@ -4098,6 +4098,44 @@ select
 ----
 NULL Timestamp(s)
 
+# Typed null scalar paths for the remaining timestamp units.
+query PTPTPT
+select
+  to_local_time(arrow_cast(NULL, 'Timestamp(ms, "Asia/Tokyo")')),
+  arrow_typeof(to_local_time(arrow_cast(NULL, 'Timestamp(ms, "Asia/Tokyo")'))),
+  to_local_time(arrow_cast(NULL, 'Timestamp(us, "Asia/Tokyo")')),
+  arrow_typeof(to_local_time(arrow_cast(NULL, 'Timestamp(us, "Asia/Tokyo")'))),
+  to_local_time(arrow_cast(NULL, 'Timestamp(ns, "Asia/Tokyo")')),
+  arrow_typeof(to_local_time(arrow_cast(NULL, 'Timestamp(ns, "Asia/Tokyo")')));
+----
+NULL Timestamp(ms) NULL Timestamp(µs) NULL Timestamp(ns)
+
+# Non-null scalar paths for second, millisecond, and microsecond units.
+query PPPTTT
+select
+  to_local_time(arrow_cast('2024-01-01T00:00:01Z', 'Timestamp(s, "Asia/Tokyo")')),
+  to_local_time(arrow_cast('2024-01-01T00:00:01Z', 'Timestamp(ms, "Asia/Tokyo")')),
+  to_local_time(arrow_cast('2024-01-01T00:00:01Z', 'Timestamp(us, "Asia/Tokyo")')),
+  arrow_typeof(to_local_time(arrow_cast('2024-01-01T00:00:01Z', 'Timestamp(s, "Asia/Tokyo")'))),
+  arrow_typeof(to_local_time(arrow_cast('2024-01-01T00:00:01Z', 'Timestamp(ms, "Asia/Tokyo")'))),
+  arrow_typeof(to_local_time(arrow_cast('2024-01-01T00:00:01Z', 'Timestamp(us, "Asia/Tokyo")')));
+----
+2024-01-01T09:00:01 2024-01-01T09:00:01 2024-01-01T09:00:01 Timestamp(s) Timestamp(ms) Timestamp(µs)
+
+# Array paths for the three otherwise-uncovered timestamp units.
+query PPPTTT
+select
+  to_local_time(arrow_cast(value, 'Timestamp(s, "Asia/Tokyo")')),
+  to_local_time(arrow_cast(value, 'Timestamp(ms, "Asia/Tokyo")')),
+  to_local_time(arrow_cast(value, 'Timestamp(us, "Asia/Tokyo")')),
+  arrow_typeof(to_local_time(arrow_cast(value, 'Timestamp(s, "Asia/Tokyo")'))),
+  arrow_typeof(to_local_time(arrow_cast(value, 'Timestamp(ms, "Asia/Tokyo")'))),
+  arrow_typeof(to_local_time(arrow_cast(value, 'Timestamp(us, "Asia/Tokyo")')))
+from (values ('2024-01-01T00:00:01Z'), (NULL)) as t(value);
+----
+2024-01-01T09:00:01 2024-01-01T09:00:01 2024-01-01T09:00:01 Timestamp(s) Timestamp(ms) Timestamp(µs)
+NULL NULL NULL Timestamp(s) Timestamp(ms) Timestamp(µs)
+
 query PTPT
 select
   time,
