@@ -742,6 +742,25 @@ select {'m': map(['outer'], [map(['inner'], [99])])}['m']['outer']['inner'];
 ----
 99
 
+# Nested map keys use structural comparison
+query T
+select get_field(map([[3, 4]], ['second']), [3, 4]);
+----
+second
+
+query T
+select get_field(map([[1, 2]], ['first']), [9, 9]);
+----
+NULL
+
+query T
+select get_field(
+  map([named_struct('a', 2)], ['two']),
+  named_struct('a', 2)
+);
+----
+two
+
 ###############################################
 # Additional tests for nested get_field support
 ###############################################
@@ -1732,4 +1751,3 @@ drop view leaf_view;
 
 statement ok
 drop table leaf_base;
-
