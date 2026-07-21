@@ -431,6 +431,31 @@ logical_plan
 01)Projection: initcap(test_lowercase.column1_utf8view_lower) AS c1, initcap(test_lowercase.column1_utf8_lower) AS c2, initcap(test_lowercase.column1_large_utf8_lower) AS c3
 02)--TableScan: test_lowercase projection=[column1_utf8_lower, column1_large_utf8_lower, column1_utf8view_lower]
 
+# Execute each physical string path, including null-free StringView batches
+query TTT rowsort
+SELECT
+  concat('[', coalesce(initcap(column1_utf8view_lower), '<null>'), ']'),
+  concat('[', coalesce(initcap(column1_utf8_lower), '<null>'), ']'),
+  concat('[', coalesce(initcap(column1_large_utf8_lower), '<null>'), ']')
+FROM test_lowercase;
+----
+[<null>] [<null>] [<null>]
+[Andrew] [Andrew] [Andrew]
+[Raphael] [Raphael] [Raphael]
+[Xiangpeng] [Xiangpeng] [Xiangpeng]
+[] [] []
+
+query T
+SELECT initcap(arrow_cast('hello WORLD', 'LargeUtf8'));
+----
+Hello World
+
+query error DataFusion error:
+SELECT initcap();
+
+query error DataFusion error:
+SELECT initcap('a', 'b');
+
 statement ok
 drop table test_lowercase
 
