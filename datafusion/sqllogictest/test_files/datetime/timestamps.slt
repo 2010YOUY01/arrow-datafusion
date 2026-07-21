@@ -2461,6 +2461,62 @@ SELECT arrow_typeof(date_trunc('hour', TIME '14:30:45'));
 ----
 Time64(ns)
 
+# Scalar Time64(us), Time32(ms), and Time32(s) dispatches across every valid
+# granularity. Use non-default string widths for granularity as well.
+query DDDDD
+SELECT
+  date_trunc(arrow_cast('hour', 'Utf8View'), arrow_cast(TIME '14:30:45.123456', 'Time64(Microsecond)')),
+  date_trunc(arrow_cast('minute', 'LargeUtf8'), arrow_cast(TIME '14:30:45.123456', 'Time64(Microsecond)')),
+  date_trunc('second', arrow_cast(TIME '14:30:45.123456', 'Time64(Microsecond)')),
+  date_trunc('millisecond', arrow_cast(TIME '14:30:45.123456', 'Time64(Microsecond)')),
+  date_trunc('microsecond', arrow_cast(TIME '14:30:45.123456', 'Time64(Microsecond)'))
+----
+14:00:00 14:30:00 14:30:45 14:30:45.123 14:30:45.123456
+
+query DDDDD
+SELECT
+  date_trunc('hour', arrow_cast(TIME '14:30:45.123', 'Time32(Millisecond)')),
+  date_trunc('minute', arrow_cast(TIME '14:30:45.123', 'Time32(Millisecond)')),
+  date_trunc('second', arrow_cast(TIME '14:30:45.123', 'Time32(Millisecond)')),
+  date_trunc('millisecond', arrow_cast(TIME '14:30:45.123', 'Time32(Millisecond)')),
+  date_trunc('microsecond', arrow_cast(TIME '14:30:45.123', 'Time32(Millisecond)'))
+----
+14:00:00 14:30:00 14:30:45 14:30:45.123 14:30:45.123
+
+query DDDDD
+SELECT
+  date_trunc('hour', arrow_cast(TIME '14:30:45', 'Time32(Second)')),
+  date_trunc('minute', arrow_cast(TIME '14:30:45', 'Time32(Second)')),
+  date_trunc('second', arrow_cast(TIME '14:30:45', 'Time32(Second)')),
+  date_trunc('millisecond', arrow_cast(TIME '14:30:45', 'Time32(Second)')),
+  date_trunc('microsecond', arrow_cast(TIME '14:30:45', 'Time32(Second)'))
+----
+14:00:00 14:30:00 14:30:45 14:30:45 14:30:45
+
+# Array dispatches for all four Time representations, preserving nulls.
+query DDDD
+SELECT
+  date_trunc('minute', arrow_cast(t, 'Time64(Nanosecond)')),
+  date_trunc('second', arrow_cast(t, 'Time64(Microsecond)')),
+  date_trunc('minute', arrow_cast(t, 'Time32(Millisecond)')),
+  date_trunc('hour', arrow_cast(t, 'Time32(Second)'))
+FROM (VALUES (TIME '14:30:45.123'), (NULL)) AS v(t)
+----
+14:30:00 14:30:45 14:30:00 14:00:00
+NULL NULL NULL NULL
+
+query error DataFusion error:
+SELECT date_trunc()
+
+query error DataFusion error:
+SELECT date_trunc('hour')
+
+query error DataFusion error:
+SELECT date_trunc('hour', TIME '12:00:00', 1)
+
+query error DataFusion error:
+SELECT date_trunc(NULL, TIME '12:00:00')
+
 query error DataFusion error: Execution error: Timestamp 9223372036854775807 out of range
 SELECT date_trunc(
   'hour',
