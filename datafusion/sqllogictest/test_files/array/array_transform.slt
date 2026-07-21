@@ -399,6 +399,21 @@ SELECT array_transform(NULL, x -> x * 2);
 ----
 NULL
 
+# Preserve LargeList input and its empty and null rows.
+query ?
+SELECT array_transform(arrow_cast(a, 'LargeList(Int64)'), x -> x * 2)
+FROM (VALUES ([1, 2]), ([]), (NULL)) AS t(a)
+----
+[2, 4]
+[]
+NULL
+
+# Alias uses the same higher-order implementation.
+query ?
+SELECT list_transform(arrow_cast([1, NULL, 3], 'LargeList(Int64)'), x -> x + 1)
+----
+[2, NULL, 4]
+
 query error
 select array_transform();
 ----
