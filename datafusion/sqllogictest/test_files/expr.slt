@@ -593,6 +593,33 @@ SELECT octet_length(NULL)
 ----
 NULL
 
+# LargeUtf8 scalar path returns Int64 and counts bytes rather than characters.
+query IIT
+SELECT
+  octet_length(arrow_cast('josé', 'LargeUtf8')),
+  octet_length(arrow_cast(NULL, 'LargeUtf8')),
+  arrow_typeof(octet_length(arrow_cast('josé', 'LargeUtf8')))
+----
+5 NULL Int64
+
+# LargeUtf8 array values preserve nulls.
+query I
+SELECT octet_length(arrow_cast(value, 'LargeUtf8'))
+FROM (VALUES ('Ångström'), (''), (NULL)) AS t(value)
+----
+10
+0
+NULL
+
+query error DataFusion error:
+SELECT octet_length()
+
+query error DataFusion error:
+SELECT octet_length('a', 'b')
+
+query error DataFusion error:
+SELECT octet_length([1])
+
 query T
 SELECT repeat('Pg', 4)
 ----
