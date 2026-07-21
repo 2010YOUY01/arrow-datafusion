@@ -246,6 +246,38 @@ SELECT levenshtein(NULL, NULL)
 ----
 NULL
 
+# Mixed logical string widths and array rows.
+query IIT
+SELECT
+  levenshtein(arrow_cast(left_value, 'LargeUtf8'), arrow_cast(right_value, 'Utf8')),
+  levenshtein(arrow_cast(left_value, 'Utf8View'), arrow_cast(right_value, 'LargeUtf8')),
+  arrow_typeof(levenshtein(arrow_cast(left_value, 'LargeUtf8'), arrow_cast(right_value, 'Utf8')))
+FROM (VALUES
+  ('kitten', 'sitting'),
+  ('josé', 'jose'),
+  ('', ''),
+  (NULL, 'a'),
+  ('a', NULL)
+) AS t(left_value, right_value)
+----
+3 3 Int64
+1 1 Int64
+0 0 Int64
+NULL NULL Int64
+NULL NULL Int64
+
+query error DataFusion error:
+SELECT levenshtein()
+
+query error DataFusion error:
+SELECT levenshtein('a')
+
+query error DataFusion error:
+SELECT levenshtein('a', 'b', 'c')
+
+query error DataFusion error:
+SELECT levenshtein([1], [2])
+
 
 query T
 SELECT lpad('hi', -1, 'xy')
