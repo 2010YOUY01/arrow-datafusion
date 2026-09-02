@@ -175,33 +175,43 @@ pub(crate) struct PartialHashAggregateStream {
 }
 
 /// States of partial hash aggregation. Each variant holds what its state works
-/// on, and nothing else, so a state can be understood on its own. Each state is
-/// handled by one method of [`PartialHashAggregateStream`], which returns the
-/// next state.
+/// on, and nothing else, so a state can be understood on its own. Each state
+/// except `Done` is handled by the `handle_*` method of
+/// [`PartialHashAggregateStream`] named after it, which returns the next state.
+///
+/// Unlike [`FinalHashAggregateState`], there is no `Error` variant: an error
+/// leaves [`PartialHashAggregateStream::create_stream`] through `?`, which ends
+/// the generator and drops every resource the states own.
 ///
 /// See the state-transition graph in [`PartialHashAggregateStream::create_stream`].
 enum PartialHashAggregateState {
-    /// Aggregating input batches into the hash table.
+    /// The table is building, possibly empty, and the input is open.
     ReadingInput {
         hash_table: AggregateHashTable<PartialMarker>,
     },
-    /// Emitting the states taken out of the table when it ran out of memory,
-    /// before reading input continues with the emptied table.
+    /// The table ran out of memory: `states` holds every partial state taken out
+    /// of it, and `hash_table` is empty and still building.
     EmittingOnMemoryPressure {
         hash_table: AggregateHashTable<PartialMarker>,
         states: RecordBatch,
     },
-    /// Emitting every accumulated group. If `skip_table` is `Some`, the probe
-    /// decided to skip partial aggregation, and the remaining input is converted
-    /// with that table afterwards; otherwise the stream is done.
+    /// No more input is aggregated into `hash_table`, which is still building
+    /// and is switched to outputting here. If `skip_table` is `Some`, the probe
+    /// decided to skip partial aggregation, the input is still open, and the
+    /// remaining input is converted with that table afterwards; otherwise the
+    /// input was closed, and the stream is done after the output.
     ProducingOutput {
         hash_table: AggregateHashTable<PartialMarker>,
         skip_table: Option<AggregateHashTable<PartialSkipMarker>>,
     },
-    /// Converting the remaining input directly to partial states.
+    /// Every accumulated group was emitted, and the aggregating table and its
+    /// memory reservation were released. `skip_table` converts the remaining
+    /// input directly to partial states.
     SkippingAggregation {
         skip_table: AggregateHashTable<PartialSkipMarker>,
     },
+    /// Nothing is left to emit. The state that led here already released the
+    /// tables and the memory reservation; the generator returns.
     Done,
 }
 
@@ -504,9 +514,9 @@ impl PartialHashAggregateStream {
     ///
     /// State transitions are implemented using the generator pattern; see the
     /// comments in [`async_try_stream`]. Each state below is one variant of
-    /// [`PartialHashAggregateState`], holding what the state works on, and one
-    /// method that does the work and returns the next state. This function only
-    /// dispatches.
+    /// [`PartialHashAggregateState`], holding what the state works on, and,
+    /// except for `Done`, one `handle_*` method that does the work and returns
+    /// the next state. This function only dispatches, and returns on `Done`.
     ///
     /// Conceptual state-transition graph:
     ///
@@ -518,10 +528,10 @@ impl PartialHashAggregateStream {
     ///
     /// ReadingInput
     ///   Aggregate one batch into the hash table, then check the exits below in
-    ///   this order.
+    ///   this order. When no input is left, go to ProducingOutput as well.
     ///   -> ProducingOutput
-    ///      Input was exhausted, or the soft group limit was reached. Close the
-    ///      input, then output the accumulated groups.
+    ///      The soft group limit was reached, or the input was exhausted. Close
+    ///      the input, then output the accumulated groups.
     ///   -> ProducingOutput, then SkippingAggregation
     ///      The probe decided to skip partial aggregation. Output the accumulated
     ///      groups first, then convert the remaining input directly to partial
@@ -573,24 +583,29 @@ impl PartialHashAggregateStream {
             loop {
                 state = match state {
                     PartialHashAggregateState::ReadingInput { hash_table } => {
-                        self.read_input(hash_table).await?
+                        self.handle_reading_input(hash_table).await?
                     }
                     PartialHashAggregateState::EmittingOnMemoryPressure {
                         hash_table,
                         states,
                     } => {
-                        self.emit_on_memory_pressure(hash_table, states, &mut emitter)
-                            .await
+                        self.handle_emitting_on_memory_pressure(
+                            hash_table,
+                            states,
+                            &mut emitter,
+                        )
+                        .await
                     }
                     PartialHashAggregateState::ProducingOutput {
                         hash_table,
                         skip_table,
                     } => {
-                        self.produce_output(hash_table, skip_table, &mut emitter)
+                        self.handle_producing_output(hash_table, skip_table, &mut emitter)
                             .await?
                     }
                     PartialHashAggregateState::SkippingAggregation { skip_table } => {
-                        self.skip_aggregation(skip_table, &mut emitter).await?
+                        self.handle_skipping_aggregation(skip_table, &mut emitter)
+                            .await?
                     }
                     PartialHashAggregateState::Done => return Ok(()),
                 };
@@ -604,7 +619,7 @@ impl PartialHashAggregateStream {
     /// output itself: emitting is left to the state it transitions to.
     ///
     /// See comments at [`Self::create_stream`] for details.
-    async fn read_input(
+    async fn handle_reading_input(
         &mut self,
         mut hash_table: AggregateHashTable<PartialMarker>,
     ) -> Result<PartialHashAggregateState> {
@@ -651,6 +666,7 @@ impl PartialHashAggregateStream {
 
         // No more input is read: release it (and whatever upstream holds for it)
         // now, instead of when the generator finishes.
+        let _timer = elapsed_compute.timer();
         self.close_input();
         Ok(PartialHashAggregateState::ProducingOutput {
             hash_table,
@@ -663,7 +679,7 @@ impl PartialHashAggregateStream {
     /// - If it fails with out-of-memory:
     ///   - and groups are accumulated, takes every partial state out of the
     ///     table, shrinks the reservation to the emptied table, and returns
-    ///     `Ok(Some(states))` for [`Self::emit_on_memory_pressure`] to emit. The
+    ///     `Ok(Some(states))` for [`Self::handle_emitting_on_memory_pressure`] to emit. The
     ///     final stage merges repeated states of the same group, so emitting
     ///     incomplete results is correct.
     ///   - and no group is accumulated, early emission cannot release any
@@ -671,7 +687,7 @@ impl PartialHashAggregateStream {
     ///
     /// # Implementation Note
     /// All accumulated states are materialized at once here, and
-    /// [`Self::emit_on_memory_pressure`] slices them into `batch_size` output
+    /// [`Self::handle_emitting_on_memory_pressure`] slices them into `batch_size` output
     /// batches. Emit them incrementally after blocked state management is ready.
     ///
     /// Issue: <https://github.com/apache/datafusion/issues/7065>
@@ -698,7 +714,7 @@ impl PartialHashAggregateStream {
     /// `batch_size` slices, then resumes reading input with the emptied table.
     ///
     /// See comments at [`Self::create_stream`] for details.
-    async fn emit_on_memory_pressure(
+    async fn handle_emitting_on_memory_pressure(
         &mut self,
         hash_table: AggregateHashTable<PartialMarker>,
         states: RecordBatch,
@@ -721,12 +737,13 @@ impl PartialHashAggregateStream {
     /// `skip_table` is `Some`, and is done otherwise.
     ///
     /// See comments at [`Self::create_stream`] for details.
-    async fn produce_output(
+    async fn handle_producing_output(
         &mut self,
         mut hash_table: AggregateHashTable<PartialMarker>,
         skip_table: Option<AggregateHashTable<PartialSkipMarker>>,
         emitter: &mut TryEmitter<RecordBatch, DataFusionError>,
     ) -> Result<PartialHashAggregateState> {
+        debug_assert!(hash_table.is_building());
         let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
         let mut timer = elapsed_compute.timer();
 
@@ -756,10 +773,11 @@ impl PartialHashAggregateStream {
     }
 
     /// Converts each remaining raw input batch directly to partial states, without
-    /// inserting its rows into a hash table, until the input is exhausted.
+    /// inserting its rows into a hash table, until the input is exhausted; the
+    /// stream is then done.
     ///
     /// See comments at [`Self::create_stream`] for details.
-    async fn skip_aggregation(
+    async fn handle_skipping_aggregation(
         &mut self,
         mut skip_table: AggregateHashTable<PartialSkipMarker>,
         emitter: &mut TryEmitter<RecordBatch, DataFusionError>,
@@ -1491,7 +1509,7 @@ mod tests {
             total_output_groups, num_groups,
             "Unexpected number of groups",
         );
-        // Both the drained groups and the skipped rows are counted as output.
+        // Both the accumulated groups and the skipped rows are counted as output.
         let metrics = aggregate_exec.metrics().unwrap();
         assert_eq!(metrics.output_rows(), Some(num_groups));
 
