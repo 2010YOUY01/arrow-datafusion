@@ -133,7 +133,7 @@ impl<T: 'static> JoinSet<T> {
     }
 
     /// [JoinSet::detach_all](tokio::task::JoinSet::detach_all) - Detach all tasks.
-    pub fn detach_all(&mut self) {
+    pub fn detach_all_tasks(&mut self) {
         self.inner.detach_all()
     }
 
