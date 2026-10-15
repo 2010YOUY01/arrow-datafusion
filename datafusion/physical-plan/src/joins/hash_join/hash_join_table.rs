@@ -31,6 +31,7 @@ use datafusion_common::hash_utils::RandomState;
 use datafusion_common::{
     JoinSide, JoinType, NullEquality, Result, assert_or_internal_err, internal_err,
 };
+use datafusion_execution::memory_pool::MemoryReservation;
 use datafusion_physical_expr::PhysicalExprRef;
 use datafusion_physical_expr_common::utils::evaluate_expressions_to_arrays;
 
@@ -38,12 +39,15 @@ use super::build::JoinBuildState;
 use super::stream::lookup_join_hashmap;
 use crate::coalesce::{LimitedBatchCoalescer, PushBatchStatus};
 use crate::hash_utils::create_hashes;
+use crate::joins::Map;
+use crate::joins::integer_prefilter::PrefilterState;
+use crate::joins::join_hash_map::ProbeOffset;
 use crate::joins::utils::{
     BuildProbeJoinMetrics, ColumnIndex, JoinFilter, JoinKeyComparator,
     adjust_indices_by_join_type, apply_join_filter_to_indices,
     build_batch_empty_build_side, build_batch_from_indices, matchable_join_keys,
 };
-use crate::joins::{Map, MapOffset};
+use crate::metrics::Count;
 
 /// Join semantics and output settings for one probe partition.
 pub(super) struct HashJoinTableConfig {
@@ -155,6 +159,7 @@ pub(super) struct HashJoinTable {
     context: HashJoinTableConfig,
     /// Counters and timings for this join partition.
     metrics: BuildProbeJoinMetrics,
+    probe_prefilter_rows_pruned: Count,
 
     // ===================
     // Static data buffers
@@ -172,7 +177,7 @@ pub(super) struct HashJoinTable {
     /// Current execution phase.
     phase: Phase,
     /// Where to resume candidate lookup; `None` means this batch is exhausted.
-    next_offset: Option<MapOffset>,
+    next_offset: Option<ProbeOffset>,
     /// Last probe row passing the full ON condition. Unmatched probe rows
     /// are considered after this row, even when its matches span chunks.
     joined_probe_idx: Option<usize>,
@@ -187,6 +192,8 @@ pub(super) struct HashJoinTable {
     key_comparator: Option<JoinKeyComparator>,
     /// Lookup allocations reused across chunks and input batches.
     hashes: Vec<u64>,
+    /// Per-partition sampling state and memory for the optional lookup mask.
+    integer_prefilter_state: Option<(PrefilterState, MemoryReservation)>,
 
     // ==============
     // Output buffers
@@ -222,7 +229,8 @@ pub(super) struct HashJoinTable {
 struct ProbeBatch {
     input: RecordBatch,
     keys: Vec<ArrayRef>,
-    valid_keys: Option<NullBuffer>,
+    /// Rows eligible for lookup after NULL and integer membership filtering.
+    lookup_keys: Option<NullBuffer>,
 }
 
 /// The next action for the caller of [`HashJoinTable::next_output_batch`].
@@ -255,6 +263,8 @@ impl HashJoinTable {
         build: Arc<JoinBuildState>,
         context: HashJoinTableConfig,
         metrics: BuildProbeJoinMetrics,
+        integer_prefilter_state: Option<(PrefilterState, MemoryReservation)>,
+        probe_prefilter_rows_pruned: Count,
     ) -> Self {
         // An empty map may still have build rows with NULL keys. Left/full
         // joins must retain those rows for final null extension.
@@ -280,6 +290,7 @@ impl HashJoinTable {
             matched_probe_idx: None,
             key_comparator: None,
             hashes: Vec::new(),
+            integer_prefilter_state,
             build_indices: Vec::with_capacity(lookup_capacity),
             probe_indices: Vec::with_capacity(lookup_capacity),
             array_map_buffers: None,
@@ -290,6 +301,7 @@ impl HashJoinTable {
             ),
             context,
             metrics,
+            probe_prefilter_rows_pruned,
             phase,
         }
     }
@@ -309,6 +321,10 @@ impl HashJoinTable {
             self.probe.is_none(),
             "HashJoinTable: drain the current input before pushing another batch"
         );
+        // The previous batch's lookup mask was released when it was drained.
+        if let Some((_, reservation)) = &self.integer_prefilter_state {
+            reservation.free();
+        }
         let keys = evaluate_expressions_to_arrays(&self.context.on_right, &batch)?;
         let valid_keys = if let Map::HashMap(_) = self.build.data.map.as_ref() {
             self.hashes.clear();
@@ -319,20 +335,53 @@ impl HashJoinTable {
             None
         };
 
+        let lookup_keys = if let (Some((state, reservation)), Some(filter)) = (
+            self.integer_prefilter_state.as_mut(),
+            self.build.data.integer_prefilter.as_ref(),
+        ) {
+            let timer = self.metrics.join_time.timer();
+            let bytes =
+                PrefilterState::mask_memory_size(batch.num_rows(), valid_keys.is_some());
+            let lookup_keys = if state.should_filter(batch.num_rows())
+                && bytes.is_some_and(|bytes| reservation.try_resize(bytes).is_ok())
+            {
+                if let Some(mask) = state.filter(filter, keys[0].as_ref()) {
+                    self.probe_prefilter_rows_pruned.add(mask.null_count());
+                    let lookup = NullBuffer::union(valid_keys.as_ref(), Some(&mask));
+                    drop(mask);
+                    reservation.resize(
+                        lookup
+                            .as_ref()
+                            .map_or(0, |mask| mask.inner().inner().capacity()),
+                    );
+                    lookup
+                } else {
+                    reservation.free();
+                    valid_keys
+                }
+            } else {
+                valid_keys
+            };
+            timer.done();
+            lookup_keys
+        } else {
+            valid_keys
+        };
+
         self.metrics.input_batches.add(1);
         self.metrics.input_rows.add(batch.num_rows());
         self.metrics.probe_hit_rate.add_total(batch.num_rows());
 
         // Every cursor and cached comparator belongs to these input arrays.
         // Keep the scratch allocations, but reset all progress together.
-        self.next_offset = Some((0, None));
+        self.next_offset = Some(ProbeOffset::AtRow { row: 0 });
         self.joined_probe_idx = None;
         self.matched_probe_idx = None;
         self.key_comparator = None;
         self.probe = Some(ProbeBatch {
             input: batch,
             keys,
-            valid_keys,
+            lookup_keys,
         });
         Ok(())
     }
@@ -485,7 +534,7 @@ impl HashJoinTable {
                 &probe.keys,
                 context.null_equality,
                 &self.hashes,
-                probe.valid_keys.as_ref(),
+                probe.lookup_keys.as_ref(),
                 context.batch_size,
                 offset,
                 &mut self.probe_indices,
@@ -592,6 +641,7 @@ impl HashJoinTable {
     /// Output already materialized in the coalescer remains available.
     fn release_probe(&mut self) {
         self.probe = None;
+        self.integer_prefilter_state = None;
         self.next_offset = None;
         self.joined_probe_idx = None;
         self.matched_probe_idx = None;

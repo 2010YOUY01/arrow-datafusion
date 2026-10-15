@@ -27,14 +27,16 @@ use std::sync::Arc;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{DataFusionError, Result, internal_err};
+use datafusion_execution::memory_pool::MemoryReservation;
 use datafusion_execution::{TryEmitter, async_try_stream};
 use futures::TryStreamExt;
 
 use super::build::HashJoinBuild;
 use super::hash_join_table::{HashJoinTable, HashJoinTableConfig, JoinStep};
 use crate::SendableRecordBatchStream;
+use crate::joins::integer_prefilter::PrefilterState;
 use crate::joins::utils::BuildProbeJoinMetrics;
-use crate::metrics::BaselineMetrics;
+use crate::metrics::{BaselineMetrics, Count};
 use crate::stream::{ObservedStream, RecordBatchStreamAdapter};
 
 /// Implementation for regular (Inner/Left/Right/Full) hash join.
@@ -58,6 +60,8 @@ struct Building {
     probe: SendableRecordBatchStream,
     config: HashJoinTableConfig,
     metrics: BuildProbeJoinMetrics,
+    integer_prefilter_state: Option<(PrefilterState, MemoryReservation)>,
+    probe_prefilter_rows_pruned: Count,
 }
 
 struct Probing {
@@ -71,6 +75,8 @@ impl RegularHashJoinStream {
         probe: SendableRecordBatchStream,
         config: HashJoinTableConfig,
         metrics: BuildProbeJoinMetrics,
+        integer_prefilter_state: Option<(PrefilterState, MemoryReservation)>,
+        probe_prefilter_rows_pruned: Count,
     ) -> Self {
         Self {
             schema: Arc::clone(&config.schema),
@@ -80,6 +86,8 @@ impl RegularHashJoinStream {
                 probe,
                 config,
                 metrics,
+                integer_prefilter_state,
+                probe_prefilter_rows_pruned,
             }),
         }
     }
@@ -151,7 +159,13 @@ impl Building {
         let build = self.build.prepare().await?;
         Ok(ExecutionStage::Probing(Probing {
             probe: self.probe,
-            table: HashJoinTable::new(build, self.config, self.metrics),
+            table: HashJoinTable::new(
+                build,
+                self.config,
+                self.metrics,
+                self.integer_prefilter_state,
+                self.probe_prefilter_rows_pruned,
+            ),
         }))
     }
 }
