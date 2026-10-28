@@ -1567,7 +1567,7 @@ mod tests {
         ");
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn test_async() -> Result<()> {
         let task_ctx = Arc::new(TaskContext::default());
         let schema = make_partition(11).schema();

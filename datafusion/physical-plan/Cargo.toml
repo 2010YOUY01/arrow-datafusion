@@ -104,6 +104,7 @@ tokio = { workspace = true, features = [
     "rt-multi-thread",
     "fs",
     "parking_lot",
+    "test-util",
 ] }
 
 # Model checker for the hash join probe-completion protocol; see
