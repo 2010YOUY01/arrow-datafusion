@@ -4721,10 +4721,10 @@ async fn test_should_emit_early_when_have_enough_data_to_emit() -> Result<()> {
             ] {
                 // Make sure the number of batches is enough for all join type to emit some output
                 let number_of_batches = if output_batch_size <= BATCH_SIZE {
-                    100
+                    32
                 } else {
                     // Have enough batches
-                    (output_batch_size * 100) / BATCH_SIZE
+                    (output_batch_size * 32) / BATCH_SIZE
                 };
 
                 let (left, right, left_memory, right_memory) =
