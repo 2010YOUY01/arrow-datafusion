@@ -934,7 +934,8 @@ async fn test_external_sort_zero_merge_reservation() {
 
     let ctx = SessionContext::new_with_config_rt(config, runtime);
 
-    let query = "select * from generate_series(1,10000000) as t1(v1) order by v1 desc;";
+    // Two million i64 values exceed the 10 MiB pool and force spilling.
+    let query = "select * from generate_series(1,2000000) as t1(v1) order by v1 desc;";
     let df = ctx.sql(query).await.unwrap();
 
     let physical_plan = df.create_physical_plan().await.unwrap();
@@ -942,7 +943,7 @@ async fn test_external_sort_zero_merge_reservation() {
     let stream = physical_plan.execute(0, task_ctx).unwrap();
 
     // Ensures execution succeed
-    let _result = collect(stream).await;
+    let _result = collect(stream).await.unwrap();
 
     // Ensures the query spilled during execution
     let spill_count = plan_spill_count(physical_plan.as_ref());
