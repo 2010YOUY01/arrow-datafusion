@@ -51,14 +51,15 @@ async fn test_memory_limit_with_spill() {
         .await
         .unwrap();
 
-    let query = "select * from generate_series(1,10000000) as t1(v1) order by v1 desc;";
+    // One million i64 values exceed the 1 MiB limit and force spilling.
+    let query = "select * from generate_series(1,1000000) as t1(v1) order by v1 desc;";
     let df = ctx.sql(query).await.unwrap();
 
     let plan = df.create_physical_plan().await.unwrap();
     let task_ctx = Arc::new(TaskContext::from(&ctx.state()));
     let stream = plan.execute(0, task_ctx).unwrap();
 
-    let _results = collect(stream).await;
+    let _results = collect(stream).await.unwrap();
     let spill_count = plan_spill_count(plan.as_ref());
     assert!(spill_count > 0, "Expected spills but none occurred");
 }
