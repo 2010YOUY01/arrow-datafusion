@@ -497,13 +497,13 @@ mod tests {
     }
 
     /// Returns the number of GET requests that the scan in `sql` sends.
-    async fn gets_for_query(sql: &str) -> usize {
+    async fn gets_for_query(sql: &str, parquet: Bytes) -> usize {
         use datafusion::execution::object_store::ObjectStoreUrl;
         use datafusion::prelude::{ParquetReadOptions, SessionContext};
 
         let store = Arc::new(store(&[]).await);
         store
-            .put(&Path::from("t.parquet"), wide_parquet().into())
+            .put(&Path::from("t.parquet"), parquet.into())
             .await
             .unwrap();
         let ctx = SessionContext::new();
@@ -522,8 +522,9 @@ mod tests {
     async fn distant_column_chunks_cost_more_requests() {
         // DataFusion reads both column chunks with one `get_ranges` call. On
         // S3 that is two requests, because the chunks are far apart.
-        let one = gets_for_query("SELECT sum(c0) FROM t").await;
-        let two = gets_for_query("SELECT sum(c0), sum(c7) FROM t").await;
+        let parquet = wide_parquet();
+        let one = gets_for_query("SELECT sum(c0) FROM t", parquet.clone()).await;
+        let two = gets_for_query("SELECT sum(c0), sum(c7) FROM t", parquet).await;
 
         assert_eq!(two, one + 1);
     }
