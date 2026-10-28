@@ -2375,7 +2375,7 @@ mod tests {
     //
     // is sent. Source stops sending data to output. We collect, result emitted by the `BoundedWindowExec` at the
     // end of the pipeline with a timeout (Since no `None` is sent from source. Collection never ends otherwise).
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn bounded_window_exec_linear_mode_range_information() -> Result<()> {
         let n_rows = 10;
         let chunk_length = 2;
