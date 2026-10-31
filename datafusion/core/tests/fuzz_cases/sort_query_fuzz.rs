@@ -609,6 +609,34 @@ impl SortFuzzerTestGenerator {
 mod test {
     use super::*;
 
+    /// Reproduce the sort-path comparison failure from this CI run:
+    /// https://github.com/apache/datafusion/actions/runs/41196052207/job/124522323666
+    ///
+    /// Replay the fixed seeds directly so the randomized runner's time limit
+    /// cannot skip the failing case.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_sort_query_dictionary_reproducer() {
+        let gen_seed = 1_793_445_468;
+        let mut test_generator = SortFuzzerTestGenerator::new(
+            2000,
+            3,
+            "sort_fuzz_table".to_string(),
+            get_supported_types_columns(gen_seed),
+            false,
+            gen_seed,
+        );
+
+        test_generator
+            .fuzzer_run(
+                17_320_197_313_368_524_478,
+                16_774_755_103_655_697_964,
+                1_568_822_825_954_225_201,
+                true,
+            )
+            .await
+            .unwrap();
+    }
+
     /// Given the same seed, the result should be the same
     #[tokio::test]
     async fn test_sort_query_fuzzer_deterministic() {
