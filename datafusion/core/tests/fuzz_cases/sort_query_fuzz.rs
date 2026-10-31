@@ -9,8 +9,8 @@ use std::fmt::Write as _;
 use std::sync::Arc;
 
 use arrow::array::RecordBatch;
-use arrow::compute::concat_batches;
-use arrow_schema::SchemaRef;
+use arrow::compute::{cast, concat_batches};
+use arrow_schema::{DataType, SchemaRef};
 use datafusion::datasource::MemTable;
 use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_common::{Result, human_readable_size, instant::Instant};
@@ -212,7 +212,7 @@ impl SortQueryFuzzer {
                     } else if let Some(ref expected) = expected_results {
                         // Every projected column is an ORDER BY key, so tied
                         // rows have identical output and can be compared in order.
-                        assert_eq!(expected, &results);
+                        assert_sort_results_eq(expected, &results)?;
                     } else {
                         unreachable!();
                     }
@@ -593,11 +593,7 @@ impl SortFuzzerTestGenerator {
                 let ctx =
                     self.generate_random_config(config_seed, false, Some(threshold))?;
                 let actual = ctx.sql(&query_str).await?.collect().await?;
-                assert_eq!(
-                    results,
-                    concat_batches(&schema, &actual)?,
-                    "sort_in_place_threshold_bytes={threshold}"
-                );
+                assert_sort_results_eq(&results, &concat_batches(&schema, &actual)?)?;
             }
         }
 
@@ -605,9 +601,44 @@ impl SortFuzzerTestGenerator {
     }
 }
 
+/// Compare sorted rows by value, allowing equivalent dictionary null encodings.
+fn assert_sort_results_eq(expected: &RecordBatch, actual: &RecordBatch) -> Result<()> {
+    assert_eq!(expected.schema(), actual.schema());
+    assert_eq!(expected.num_rows(), actual.num_rows());
+    for (index, (expected, actual)) in
+        expected.columns().iter().zip(actual.columns()).enumerate()
+    {
+        // A null key and a key pointing to a null dictionary value are both SQL
+        // NULL. Tied rows may put these encodings in different positions, which
+        // Arrow array equality rejects because it compares physical null masks.
+        let (expected, actual) = match expected.data_type() {
+            DataType::Dictionary(_, value_type) => {
+                (cast(expected, value_type)?, cast(actual, value_type)?)
+            }
+            _ => (Arc::clone(expected), Arc::clone(actual)),
+        };
+        assert_eq!(expected.as_ref(), actual.as_ref(), "column {index}");
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod test {
+    use arrow::array::{ArrayRef, DictionaryArray};
+    use arrow::datatypes::UInt64Type;
+
     use super::*;
+
+    #[test]
+    #[should_panic(expected = "column 0")]
+    fn test_sort_results_dictionary_order() {
+        let batch = |values: [&str; 2]| {
+            let array: DictionaryArray<UInt64Type> = values.into_iter().collect();
+            RecordBatch::try_from_iter([("dictionary", Arc::new(array) as ArrayRef)])
+                .unwrap()
+        };
+        assert_sort_results_eq(&batch(["a", "b"]), &batch(["b", "a"])).unwrap();
+    }
 
     /// Reproduce the sort-path comparison failure from this CI run:
     /// https://github.com/apache/datafusion/actions/runs/41196052207/job/124522323666
@@ -652,6 +683,6 @@ mod test {
 
         let res1 = test_generator.fuzzer_run(1, 2, 3, false).await.unwrap();
         let res2 = test_generator.fuzzer_run(1, 2, 3, false).await.unwrap();
-        assert_eq!(res1, res2);
+        assert_sort_results_eq(&res1, &res2).unwrap();
     }
 }
