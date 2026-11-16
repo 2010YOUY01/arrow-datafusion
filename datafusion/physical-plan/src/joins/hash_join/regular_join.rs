@@ -137,7 +137,7 @@ impl RegularHashJoinStream {
 }
 
 impl Building {
-    /// See comments at [`RegularHashJoinStream::into_stream`] for details.
+    /// See the comments on [`RegularHashJoinStream::into_stream`] for details.
     async fn handle_stage(self) -> Result<ExecutionStage> {
         let build = self.build.prepare().await?;
         Ok(ExecutionStage::Probing(Probing {
@@ -149,7 +149,7 @@ impl Building {
 }
 
 impl Probing {
-    /// See comments at [`RegularHashJoinStream::into_stream`] for details.
+    /// See the comments on [`RegularHashJoinStream::into_stream`] for details.
     async fn handle_stage(
         mut self,
         emitter: &mut TryEmitter<RecordBatch, DataFusionError>,

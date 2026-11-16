@@ -21,7 +21,7 @@ use datafusion_common::{
 use datafusion_physical_expr::PhysicalExprRef;
 use datafusion_physical_expr_common::utils::evaluate_expressions_to_arrays;
 
-use super::build::JoinBuildState;
+use super::build::RegularJoinLeftData;
 use super::stream::lookup_join_hashmap;
 use crate::coalesce::{LimitedBatchCoalescer, PushBatchStatus};
 use crate::hash_utils::create_hashes;
@@ -93,7 +93,7 @@ pub(super) struct BatchedJoinProcessorConfig {
 pub(super) struct BatchedJoinProcessor {
     context: BatchedJoinProcessorConfig,
     metrics: BuildProbeJoinMetrics,
-    build: Arc<JoinBuildState>,
+    build: Arc<RegularJoinLeftData>,
     /// Input and residual-match state for the current probe batch.
     probe: Option<ProbeBatch>,
     phase: Phase,
@@ -150,7 +150,7 @@ enum Phase {
 
 impl BatchedJoinProcessor {
     pub(super) fn new(
-        build: Arc<JoinBuildState>,
+        build: Arc<RegularJoinLeftData>,
         context: BatchedJoinProcessorConfig,
         metrics: BuildProbeJoinMetrics,
     ) -> Self {
@@ -189,7 +189,7 @@ impl BatchedJoinProcessor {
     pub(super) fn push_batch(&mut self, batch: RecordBatch) -> Result<()> {
         if !matches!(self.phase, Phase::Probing) {
             return internal_err!(
-                "BatchedJoinProcessor: cannot push input after probing finished"
+                "BatchedJoinProcessor: cannot push input after probing has finished"
             );
         }
         assert_or_internal_err!(
@@ -281,7 +281,7 @@ impl BatchedJoinProcessor {
                 Phase::Finished => return Ok(JoinStep::Finished),
             };
             // Operator-level limit reached; stop probing.
-            // See comments at `output` for details.
+            // See the comments on `output` for details.
             if self.output.push_batch(batch)? == PushBatchStatus::LimitReached {
                 self.release_probe();
                 self.phase = Phase::DrainingOutput;

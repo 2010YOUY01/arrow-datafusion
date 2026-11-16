@@ -21,7 +21,7 @@ use crate::joins::array_map::ArrayMap;
 use crate::joins::hash_join::batched_join_processor::{
     BatchedJoinProcessorConfig, RegularJoinKind,
 };
-use crate::joins::hash_join::build::{HashJoinBuild, JoinBuildState};
+use crate::joins::hash_join::build::{HashJoinBuild, RegularJoinLeftData};
 use crate::joins::hash_join::inlist_builder::build_struct_inlist_values;
 use crate::joins::hash_join::not_in::{NotIn, NotInBuild};
 use crate::joins::hash_join::regular_join::RegularHashJoinStream;
@@ -240,22 +240,11 @@ fn array_map_key_range(
     Ok(Some((min_val, max_val)))
 }
 
-/// A prepared build retains its executor choice when reused with a different
-/// configuration.
-pub(super) enum JoinBuildData {
-    Regular(Arc<RegularBuildData>),
-    /// Existence/null-aware joins and regular joins with migration disabled.
-    Legacy(Arc<LegacyBuildData>),
-}
-
-pub(super) type RegularBuildData = BuildData<Arc<ReservedMap>>;
-type LegacyBuildData = BuildData<Arc<ReservedMap>>;
-
-/// Immutable build buffers shared by both executors.
-pub(super) struct BuildData<M> {
+/// Immutable build buffers and their durable reservation.
+pub(super) struct JoinBuildData {
     /// Hash table with row indices into `batch`, charged to its own
     /// reservation because it is also shared with dynamic filters.
-    pub(super) map: M,
+    pub(super) map: Arc<ReservedMap>,
     /// The input rows for the build side.
     pub(super) batch: RecordBatch,
     /// Evaluated build-side key expressions, with float `-0.0` rewritten to
@@ -276,86 +265,44 @@ pub(super) struct BuildData<M> {
     /// representations: IN-list values or a hash-table reference.
     pub(super) membership: PushdownStrategy,
     // Keep the reservation after the allocations it accounts for.
-    pub(super) reservation: MemoryReservation,
+    reservation: MemoryReservation,
 }
 
-impl JoinBuildData {
-    fn batch(&self) -> &RecordBatch {
-        match self {
-            Self::Regular(data) => &data.batch,
-            Self::Legacy(data) => &data.batch,
-        }
-    }
-
-    fn reservation(&self) -> &MemoryReservation {
-        match self {
-            Self::Regular(data) => &data.reservation,
-            Self::Legacy(data) => &data.reservation,
-        }
-    }
-
-    fn map_reserved_bytes(&self) -> usize {
-        match self {
-            Self::Regular(data) => data.map.reserved_bytes(),
-            Self::Legacy(data) => data.map.reserved_bytes(),
-        }
-    }
-
-    #[cfg(test)]
-    fn membership(&self) -> &PushdownStrategy {
-        match self {
-            Self::Regular(data) => &data.membership,
-            Self::Legacy(data) => &data.membership,
-        }
-    }
-
-    #[cfg(test)]
-    fn bounds(&self) -> Option<&PartitionBounds> {
-        match self {
-            Self::Regular(data) => data.bounds.as_ref(),
-            Self::Legacy(data) => data.bounds.as_ref(),
-        }
-    }
-}
-
-/// Collection finishes before selecting the typed execution state. The bitmap
-/// is allocated only when the join needs to emit build rows after probe EOF.
+/// Collected left-side data shared by the regular and legacy implementations.
+///
+/// This shared struct is temporary while the regular and existence join paths
+/// are separated.
+///
+/// See <https://github.com/apache/datafusion/issues/26361> for details.
 struct CollectedBuild {
     not_in: Option<NotInBuild>,
     visited: Option<BooleanBufferBuilder>,
     probe_partitions: usize,
     // Its reservation also covers the mutable state above.
-    build: JoinBuildData,
+    build: Arc<JoinBuildData>,
 }
 
 impl CollectedBuild {
-    fn into_regular(self) -> Result<JoinBuildState> {
-        let JoinBuildData::Regular(build) = self.build else {
-            return internal_err!("Regular hash join requires a regular-executor build");
-        };
-        Ok(JoinBuildState::new(
-            build,
-            self.visited,
-            self.probe_partitions,
-        ))
+    /// Create [`RegularJoinLeftData`]; see [`CollectedBuild`] for the shared setup.
+    fn into_regular_left_data(self) -> RegularJoinLeftData {
+        RegularJoinLeftData::new(self.build, self.visited, self.probe_partitions)
     }
 
-    fn into_legacy(self) -> Result<JoinLeftData> {
-        let JoinBuildData::Legacy(build) = self.build else {
-            return internal_err!("Legacy hash join requires a legacy-executor build");
-        };
-        Ok(JoinLeftData {
+    /// Create legacy [`JoinLeftData`]; see [`CollectedBuild`] for the shared setup.
+    fn into_legacy_left_data(self) -> JoinLeftData {
+        JoinLeftData {
             not_in: self.not_in,
             visited_indices_bitmap: Mutex::new(
                 self.visited.unwrap_or_else(|| BooleanBufferBuilder::new(0)),
             ),
             probe_completion: ProbeCompletion::new(self.probe_partitions),
-            build,
-        })
+            build: self.build,
+        }
     }
 }
 
-/// A build lease and mutable bookkeeping for one join execution.
+/// Left-side data and mutable bookkeeping for one legacy join execution,
+/// including regular joins when migration is disabled.
 pub(super) struct JoinLeftData {
     /// The `NOT IN` state of a null-aware join, see [`NotInBuild`].
     not_in: Option<NotInBuild>,
@@ -365,7 +312,7 @@ pub(super) struct JoinLeftData {
     /// See [`ProbeCompletion`] for the completion invariant.
     probe_completion: ProbeCompletion,
     // Drop the reservation after the mutable state it also accounts for.
-    build: Arc<LegacyBuildData>,
+    build: Arc<JoinBuildData>,
 }
 
 impl JoinLeftData {
@@ -963,8 +910,9 @@ pub struct HashJoinExec {
     /// Each output stream waits on the `OnceAsync` to signal the completion of
     /// the hash table creation.
     left_fut: Arc<OnceAsync<JoinLeftData>>,
-    /// Left-side future used only in regular hash joins.
-    regular_left_fut: Arc<OnceAsync<JoinBuildState>>,
+    /// This is similar to [`Self::left_fut`], but specific to the regular join path.
+    /// See <https://github.com/apache/datafusion/issues/26361> for details.
+    regular_left_fut: Arc<OnceAsync<RegularJoinLeftData>>,
     /// Immutable build attached by an embedding executor.
     prepared_build: Option<Arc<PreparedHashJoinBuild>>,
     /// Shared the `SeededRandomState` for the hashing algorithm (seeds preserved for serialization)
@@ -1873,7 +1821,7 @@ impl ExecutionPlan for HashJoinExec {
             .then(|| RegularJoinKind::from_join_type(self.join_type))
             .flatten();
 
-        // Both paths share collection, then take their typed build state inside
+        // Both paths share collection, then create their own left-side data inside
         // the once-only future before sibling probes can access it.
         let collect = |build_partition, probe_partitions| {
             let left_stream = self.left.execute(build_partition, Arc::clone(&context))?;
@@ -1896,7 +1844,6 @@ impl ExecutionPlan for HashJoinExec {
                 not_in,
                 array_map_created_count.clone(),
                 BuildMode::Ordinary,
-                regular_join.is_some(),
             ))
         };
 
@@ -1927,18 +1874,21 @@ impl ExecutionPlan for HashJoinExec {
             let left_fut = match (&self.prepared_build, self.mode) {
                 (Some(prepared), _) => {
                     let prepared = Arc::clone(prepared);
-                    self.regular_left_fut
-                        .try_once(|| Ok(async move { prepared.regular_probe_data() }))?
+                    self.regular_left_fut.try_once(|| {
+                        Ok(async move { Ok(prepared.regular_probe_data()) })
+                    })?
                 }
                 (None, PartitionMode::CollectLeft) => {
                     self.regular_left_fut.try_once(|| {
                         let future = collect(0, right_partitions)?;
-                        Ok(async move { future.await?.into_regular() })
+                        Ok(async move { Ok(future.await?.into_regular_left_data()) })
                     })?
                 }
                 (None, PartitionMode::Partitioned) => {
                     let future = collect(partition, 1)?;
-                    OnceFut::new(async move { future.await?.into_regular() })
+                    OnceFut::new(
+                        async move { Ok(future.await?.into_regular_left_data()) },
+                    )
                 }
                 (None, PartitionMode::Auto) => {
                     return plan_err!(
@@ -1979,16 +1929,16 @@ impl ExecutionPlan for HashJoinExec {
             (Some(prepared), _) => {
                 let prepared = Arc::clone(prepared);
                 self.left_fut.try_once(|| {
-                    Ok(async move { prepared.probe_data(right_partitions) })
+                    Ok(async move { Ok(prepared.probe_data(right_partitions)) })
                 })?
             }
             (None, PartitionMode::CollectLeft) => self.left_fut.try_once(|| {
                 let future = collect(0, right_partitions)?;
-                Ok(async move { future.await?.into_legacy() })
+                Ok(async move { Ok(future.await?.into_legacy_left_data()) })
             })?,
             (None, PartitionMode::Partitioned) => {
                 let future = collect(partition, 1)?;
-                OnceFut::new(async move { future.await?.into_legacy() })
+                OnceFut::new(async move { Ok(future.await?.into_legacy_left_data()) })
             }
             (None, PartitionMode::Auto) => {
                 return plan_err!(
@@ -3070,7 +3020,7 @@ impl CollectLeftAccumulator {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(PartialEq, Eq)]
 enum BuildMode {
     Ordinary,
     Prepared,
@@ -3289,7 +3239,6 @@ async fn collect_left_input(
     not_in: Option<NotIn>,
     array_map_created_count: Count,
     mode: BuildMode,
-    regular: bool,
 ) -> Result<CollectedBuild> {
     let schema = left_stream.schema();
     let prepared = mode == BuildMode::Prepared;
@@ -3382,8 +3331,7 @@ async fn collect_left_input(
         null_equality,
         not_in,
         &array_map_created_count,
-        mode,
-        regular,
+        prepared,
     )
 }
 
@@ -3414,10 +3362,8 @@ fn build_in_memory(
     null_equality: NullEquality,
     not_in: Option<NotIn>,
     array_map_created_count: &Count,
-    mode: BuildMode,
-    regular: bool,
+    prepared: bool,
 ) -> Result<CollectedBuild> {
-    let prepared = mode == BuildMode::Prepared;
     let is_phj_candidate = is_perfect_hash_join_candidate(on_left, schema)?;
 
     // Bound before the map so error paths release the map before its charge.
@@ -3628,25 +3574,18 @@ fn build_in_memory(
         )?;
     }
 
-    let data = Arc::new(BuildData {
-        map,
-        batch,
-        values: normalized_values,
-        bounds,
-        membership,
-        reservation,
-    });
-    let build = if regular {
-        JoinBuildData::Regular(data)
-    } else {
-        JoinBuildData::Legacy(data)
-    };
-
     Ok(CollectedBuild {
+        build: Arc::new(JoinBuildData {
+            map,
+            batch,
+            values: normalized_values,
+            bounds,
+            membership,
+            reservation,
+        }),
         not_in,
         visited,
         probe_partitions: probe_threads_count,
-        build,
     })
 }
 
@@ -4719,10 +4658,9 @@ mod tests {
             None,
             Count::new(),
             BuildMode::Ordinary,
-            false,
         )
         .await?
-        .into_legacy()?;
+        .into_legacy_left_data();
         Ok((left_data, metrics))
     }
 

@@ -16,19 +16,20 @@ use datafusion_common::Result;
 use futures::future::poll_fn;
 use parking_lot::Mutex;
 
-use super::exec::RegularBuildData;
+use super::exec::JoinBuildData;
 use crate::joins::PartitionMode;
 use crate::joins::hash_join::shared_bounds::{
     PartitionBounds, PartitionBuildData, SharedBuildAccumulator,
 };
 use crate::joins::utils::{BuildProbeJoinMetrics, OnceFut};
 
-/// [`RegularBuildData`] plus cross-partition coordination. Only one partition is
-/// responsible for final build-side unmatched output for Left/Full joins.
-pub(super) struct JoinBuildState {
+/// Left-side data and mutable bookkeeping for one regular join execution.
+/// Shares immutable [`JoinBuildData`] and coordinates unmatched build rows for
+/// Left/Full joins, so only the last probe partition emits them.
+pub(super) struct RegularJoinLeftData {
     unmatched: Option<Mutex<UnmatchedRows>>,
     // Keep the build lease last: its reservation also covers the bitmap.
-    pub(super) data: Arc<RegularBuildData>,
+    pub(super) data: Arc<JoinBuildData>,
 }
 
 struct UnmatchedRows {
@@ -36,9 +37,9 @@ struct UnmatchedRows {
     remaining_probes: usize,
 }
 
-impl JoinBuildState {
+impl RegularJoinLeftData {
     pub(super) fn new(
-        data: Arc<RegularBuildData>,
+        data: Arc<JoinBuildData>,
         visited: Option<BooleanBufferBuilder>,
         probe_partitions: usize,
     ) -> Self {
@@ -87,8 +88,8 @@ pub(super) struct HashJoinBuild {
     // ---------------------------------------------------
     /// Coordination for the dynamic filter.
     build_accumulator: Option<Arc<SharedBuildAccumulator>>,
-    /// Coordination for buffered input batches.
-    left_fut: OnceFut<JoinBuildState>,
+    /// Shared future for collecting [`RegularJoinLeftData`].
+    left_fut: OnceFut<RegularJoinLeftData>,
 
     metrics: BuildProbeJoinMetrics,
 }
@@ -97,7 +98,7 @@ impl HashJoinBuild {
     pub(super) fn new(
         partition: usize,
         mode: PartitionMode,
-        left_fut: OnceFut<JoinBuildState>,
+        left_fut: OnceFut<RegularJoinLeftData>,
         build_accumulator: Option<Arc<SharedBuildAccumulator>>,
         metrics: BuildProbeJoinMetrics,
     ) -> Self {
@@ -124,7 +125,7 @@ impl HashJoinBuild {
     /// - partition1~k: call `prepare()` for synchronization, wait for partition 0 to finish
     ///   and reuse the shared build-side data
     /// ```
-    pub(super) async fn prepare(mut self) -> Result<Arc<JoinBuildState>> {
+    pub(super) async fn prepare(mut self) -> Result<Arc<RegularJoinLeftData>> {
         let build = poll_fn(|cx| {
             // Count active polling time, excluding time suspended on input.
             let _timer = self.metrics.build_time.timer();
