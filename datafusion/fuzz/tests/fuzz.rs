@@ -55,6 +55,20 @@ async fn key_range_bitmap_union() -> Result<()> {
     .await
 }
 
+#[tokio::test]
+async fn timestamp_arithmetic() -> Result<()> {
+    run_suite(
+        &suites::timestamp::TimestampArithmeticFuzzer,
+        RunConfig {
+            run_seed: None,
+            max_cases: None,
+            time_limit: Some(Duration::from_secs(1)),
+            cases_per_dataset: 1000,
+        },
+    )
+    .await
+}
+
 async fn run_suite<T: FuzzTest>(test: &T, config: RunConfig) -> Result<()> {
     eprintln!("Running fuzz suite: {}", test.name());
     let stats = run(test, config).await?;

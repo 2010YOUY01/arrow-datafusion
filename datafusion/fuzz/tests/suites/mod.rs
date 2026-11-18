@@ -6,3 +6,4 @@
 
 pub(crate) mod key_range_bitmap;
 pub(crate) mod spill_pool;
+pub(crate) mod timestamp;
