@@ -2433,6 +2433,7 @@ dependencies = [
  "arrow",
  "bytes",
  "datafusion-common",
+ "datafusion-datasource",
  "datafusion-execution",
  "datafusion-physical-plan",
  "futures",
