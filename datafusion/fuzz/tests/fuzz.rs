@@ -55,6 +55,20 @@ async fn key_range_bitmap_union() -> Result<()> {
     .await
 }
 
+#[tokio::test]
+async fn record_batch_memory_tracker() -> Result<()> {
+    run_suite(
+        &suites::memory::RecordBatchMemoryFuzzer,
+        RunConfig {
+            run_seed: None,
+            max_cases: None,
+            time_limit: Some(Duration::from_secs(1)),
+            cases_per_dataset: 100,
+        },
+    )
+    .await
+}
+
 async fn run_suite<T: FuzzTest>(test: &T, config: RunConfig) -> Result<()> {
     eprintln!("Running fuzz suite: {}", test.name());
     let stats = run(test, config).await?;

@@ -5,4 +5,5 @@
 //! Implementation for fuzz test cases.
 
 pub(crate) mod key_range_bitmap;
+pub(crate) mod memory;
 pub(crate) mod spill_pool;
